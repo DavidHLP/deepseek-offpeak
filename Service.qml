@@ -83,9 +83,14 @@ Item {
     var summary = reason === "startup"
       ? "DeepSeek off-peak is active"
       : "DeepSeek off-peak has started"
+    // This fires on entering off-peak (and on the first tick, when the plugin
+    // starts there), so the trailing clause names the pricing in force until
+    // the end of the window being announced — off-peak. `offPeakEndLocal` is
+    // that window's end; saying "peak pricing until then" would contradict the
+    // summary line it is attached to.
     var body = "Ends " + root.offPeakEndLocal + " local (" + root.offPeakEndUtc + " UTC) \u00b7 "
       + Schedule.formatShort(root.billing.secondsToOffPeakEnd) + " left \u00b7 "
-      + "peak pricing until then"
+      + "off-peak pricing until then"
 
     notifier.command = ["notify-send", "-a", "DeepSeek Off-Peak", "-u", "low", "-t", "8000",
       summary, body]
@@ -135,15 +140,22 @@ Item {
   //      because ~/.bashrc is sourced only by interactive shells, and exporting
   //      the key there is the common setup.
   //
+  // The order matters as much as the lookup does. An interactive bash inherits
+  // this process's environment, so asking the shell first would let a ~/.bashrc
+  // export silently override a key that is already set here — and would report
+  // the result as "shell" even when the value came from the environment. The
+  // CLI resolves in the same order (see bin/deepseek-offpeak); the two must not
+  // be able to select different keys.
+  //
   //   "pending"    nothing looked up yet
   //   "resolving"  an interactive bash is running; its answer is on the way
   //   "ready"      the answer is known, even when the answer is "no key"
   //
-  // The transition out of "ready" is the one that matters: only a refresh that
-  // explicitly asks to re-resolve (`forceResolve`) may leave it. The resolver's
-  // own completion handler passes false, so a machine with no key settles
-  // instead of restarting the lookup every time it finishes — which is what an
-  // earlier version did, spawning interactive bash forever.
+  // The transition out of "ready" is the one that matters, and who is asking
+  // decides it — see Balance.apiKeyAction for the three reasons. A completion
+  // never leaves it, so a machine with no key settles instead of restarting
+  // the lookup every time it finishes, which is what an earlier version did,
+  // spawning interactive bash forever.
   property string apiKeyState: "pending"
   property string apiKey: ""
   property string apiKeySource: ""
@@ -153,6 +165,18 @@ Item {
   readonly property bool apiKeyMissing: root.apiKeyState === "ready" && !root.hasApiKey
 
   function startKeyResolver() {
+    // The environment first, and for free: no process, no shell startup file.
+    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
+    if (Balance.isUsableKey(fromEnvironment)) {
+      root.apiKey = fromEnvironment
+      root.apiKeySource = "environment"
+      root.apiKeyState = "ready"
+      // "completion": the lookup is over before a process existed, and this is
+      // the same hand-off finishKeyResolution() makes.
+      root.refreshBalance("completion")
+      return
+    }
+
     keyResolver.exitCode = -1
     keyResolver.stdoutDone = false
     keyResolver.stdoutText = ""
@@ -174,8 +198,14 @@ Item {
 
   // The key reaches curl over stdin as a config file and is written on
   // onStarted, so it appears in no command line: `ps` and /proc/*/cmdline show
-  // argv, not a pipe. PATH is set explicitly so Process's environment merge
-  // behaviour cannot matter; nothing reads the key from the environment.
+  // argv, not a pipe.
+  //
+  // Only PATH and HOME are pinned. Quickshell's Process merges this object into
+  // the inherited environment rather than replacing it — `clearEnvironment`
+  // defaults to false, and only an explicit `null` removes a variable — so
+  // HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE still reach curl.
+  // That is *not* true of the CLI, where Node's spawnSync replaces the child
+  // environment outright; see bin/deepseek-offpeak.
   readonly property var balanceEnvironment: ({
     PATH: "/usr/local/bin:/usr/bin:/bin",
     HOME: Quickshell.env("HOME")
@@ -214,6 +244,29 @@ Item {
       keyResolver.exitCode = code
       root.finishKeyResolution()
     }
+
+    // A resolver that never started (bash missing, resource exhaustion) or was
+    // killed never reports an exit code, and without this the state stays
+    // "resolving" forever: apiKeyAction then answers "wait" to every later
+    // refresh, so the balance is dead for the lifetime of the service while the
+    // panel shows neither a key nor a missing-key message. It is the same
+    // failure the balance process already recovers from, one screen down.
+    onRunningChanged: {
+      if (running) return
+      if (root.apiKeyState !== "resolving") return
+      Qt.callLater(root.recoverStuckKeyResolution)
+    }
+  }
+
+  function recoverStuckKeyResolution() {
+    if (root.apiKeyState !== "resolving") return
+    if (keyResolver.exitCode !== -1) return
+    // Settle as "looked, found nothing" rather than hanging: "report-missing"
+    // then says so, and the next poll looks again.
+    root.apiKey = ""
+    root.apiKeySource = ""
+    root.apiKeyState = "ready"
+    root.refreshBalance("completion")
   }
 
   // Called from both the stdout stream and the exit signal; whichever arrives
@@ -234,18 +287,20 @@ Item {
       root.apiKeySource = ""
     }
     root.apiKeyState = "ready"
-    // false: this lookup just finished, so report its outcome rather than
-    // ordering another one.
-    root.refreshBalance(false)
+    // "completion": this lookup just finished, so report its outcome rather
+    // than ordering another one.
+    root.refreshBalance("completion")
   }
 
-  function refreshBalance(forceResolve) {
+  // `reason` is passed straight through to Balance.apiKeyAction, which owns the
+  // decision: "completion" from a finished key lookup, "poll" from the timers,
+  // "manual" from the user. They are not interchangeable — see that function
+  // for why a held key must survive a poll but not a manual refresh.
+  function refreshBalance(reason) {
     if (root.balanceBusy) return false
 
-    // An explicit refresh also re-reads the key, so a key added to ~/.bashrc
-    // since startup is picked up without restarting the shell.
     var action = Balance.apiKeyAction(root.apiKeyState, root.hasApiKey,
-      keyResolver.running, forceResolve === true)
+      keyResolver.running, reason)
 
     if (action === "wait") return false
 
@@ -360,16 +415,18 @@ Item {
   // First read a beat after startup so the balance is on screen without the
   // panel having to be opened, then every five minutes.
   //
-  // Every scheduled pass asks to re-resolve (true): that is how a key added to
-  // ~/.bashrc takes effect without restarting the shell. It stays terminating
-  // because a scheduled pass runs once per interval — the resolver's own
-  // completion handler is what must not re-arm it.
+  // A scheduled pass is a "poll": it looks the key up again only while none is
+  // held, which is how a key added to ~/.bashrc takes effect without restarting
+  // the shell. It stays terminating because a scheduled pass runs once per
+  // interval — the resolver's own completion handler is what must not re-arm
+  // it. A held key is left alone here: re-resolving every five minutes would
+  // spawn an interactive bash 288 times a day for nothing.
   Timer {
     id: balanceFirstTimer
     interval: 3000
     repeat: false
     running: true
-    onTriggered: root.refreshBalance(true)
+    onTriggered: root.refreshBalance("poll")
   }
 
   Timer {
@@ -377,16 +434,17 @@ Item {
     interval: 300000
     repeat: true
     running: true
-    onTriggered: root.refreshBalance(true)
+    onTriggered: root.refreshBalance("poll")
   }
 
   // Recompute the countdown now and re-read the balance (single-flight, so a
   // burst of middle-clicks collapses into the one request already running).
-  // Manual: re-resolve, so a key the user just exported in a terminal is picked
-  // up without a shell restart.
+  // "manual": re-resolve even when a key is held, so one the user just exported
+  // in a terminal is picked up without a shell restart — and so a key that was
+  // rotated or revoked stops being sent.
   function refresh() {
     root.nowMs = Date.now()
-    root.refreshBalance(true)
+    root.refreshBalance("manual")
   }
 
   // -------------------------------------------------- CLI status

@@ -223,46 +223,62 @@ check("the shell lookup asks for the key without ever passing it", () => {
 check("the key lookup terminates when there is no key anywhere", () => {
   const A = B.apiKeyAction
 
-  // A usable key goes straight to the request, in every state.
-  for (const state of ["pending", "resolving", "ready"]) {
-    assert.strictEqual(A(state, true, false, false), "request", `key held, state ${state}`)
-  }
-
-  // The first pass resolves.
-  assert.strictEqual(A("pending", false, false, false), "resolve")
-
-  // While a lookup is in flight, wait — never start a second one.
-  assert.strictEqual(A("pending", false, true, false), "wait")
-  assert.strictEqual(A("resolving", false, false, false), "wait")
-  assert.strictEqual(A("resolving", false, true, true), "wait", "even when forced")
-
   // THE BUG THIS GUARDS: the resolver's own completion handler asks for a
-  // balance with forceResolve=false. If that re-armed the lookup, a machine with
-  // no key would restart interactive bash the instant each one exited, forever.
-  assert.strictEqual(A("ready", false, false, false), "report-missing")
-
-  // Terminating means: from "ready", only an explicit re-resolve moves.
+  // balance when the lookup finishes. If that re-armed the lookup, a machine
+  // with no key would restart interactive bash the instant each one exited,
+  // forever.
   let state = "pending"
   const seen = []
-  const tick = (force) => {
-    const action = A(state, false, false, force)
+  const tick = (reason) => {
+    const action = A(state, false, false, reason)
     seen.push(action)
     if (action === "resolve") state = "resolving"
     else if (action === "report-missing") state = "ready"
     return action
   }
-  // A cold start, then 200 ordinary (non-forced) passes: exactly one resolve.
-  assert.strictEqual(tick(false), "resolve")
+  // A cold start, then 200 completion passes: exactly one resolve.
+  assert.strictEqual(tick("poll"), "resolve")
   state = "ready"                       // as onExited would leave it
-  for (let i = 0; i < 200; i++) tick(false)
+  for (let i = 0; i < 200; i++) tick("completion")
   assert.strictEqual(seen.filter((a) => a === "resolve").length, 1,
-    `200 non-forced passes must not re-resolve: ${seen.slice(0, 6)}`)
+    `200 completion passes must not re-resolve: ${seen.slice(0, 6)}`)
 
-  // A forced pass (the 5-minute poll, or a manual refresh) does look again —
-  // that is how a newly exported key is picked up.
-  assert.strictEqual(tick(true), "resolve")
+  // A poll and a manual refresh do look again with no key held — that is how a
+  // newly exported key is picked up without restarting the shell.
+  assert.strictEqual(tick("poll"), "resolve")
   state = "ready"
-  assert.strictEqual(tick(true), "resolve")
+  assert.strictEqual(tick("manual"), "resolve")
+
+  // Settled and unasked, the answer is the same one every time.
+  assert.strictEqual(A("ready", false, false, "completion"), "report-missing")
+})
+
+check("a held key is left alone by the poll but re-read by a manual refresh", () => {
+  const A = B.apiKeyAction
+
+  // The poll runs every five minutes. Re-resolving there would spawn an
+  // interactive bash 288 times a day for the common case where the key in
+  // hand is fine.
+  for (const state of ["pending", "ready"]) {
+    assert.strictEqual(A(state, true, false, "poll"), "request", `poll, key held, ${state}`)
+  }
+
+  // ...but a rotated or revoked key must not be sent forever. Nothing else
+  // re-reads a key that works, so the manual refresh has to.
+  for (const state of ["pending", "ready"]) {
+    assert.strictEqual(A(state, true, false, "manual"), "resolve", `manual, key held, ${state}`)
+  }
+
+  // A lookup already in flight wins over everything: never two at once.
+  assert.strictEqual(A("resolving", false, false, "manual"), "wait")
+  assert.strictEqual(A("resolving", false, true, "poll"), "wait", "even when forced")
+  assert.strictEqual(A("resolving", true, false, "manual"), "wait", "even with a key held")
+  assert.strictEqual(A("pending", true, true, "poll"), "wait")
+
+  // A first run finds a key, whatever asked for it.
+  assert.strictEqual(A("pending", false, false, "poll"), "resolve")
+  assert.strictEqual(A("pending", false, false, "completion"), "resolve")
+  assert.strictEqual(A("ready", false, false, "manual"), "resolve")
 })
 
 console.log(`balance: ${checks} checks passed`)

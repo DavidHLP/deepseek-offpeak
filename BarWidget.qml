@@ -110,7 +110,12 @@ BarWidget {
     function toggle(): void { root.togglePanel() }
 
     function notifications(): string {
-      return root.service && root.service.notificationsEnabled ? "on" : "off"
+      // "off" would report a real setting that was read. A service that is
+      // still loading, or that failed to start, is not a disabled toggle —
+      // setNotifications() below already answers service_unavailable for that,
+      // and this is the same case.
+      if (!root.service) return "service_unavailable"
+      return root.service.notificationsEnabled ? "on" : "off"
     }
 
     function setNotifications(value: string): string {

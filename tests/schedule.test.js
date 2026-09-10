@@ -103,6 +103,37 @@ check("countdowns are never negative, at either edge of a window", () => {
   }
 })
 
+check("a countdown reads zero only after its boundary, never just before", () => {
+  // Ceiling, not rounding. Rounding reaches zero up to 499ms before the switch,
+  // and the service samples once per second, so a whole tick of "Peak 0s" could
+  // be shown while `peak` still described the interval being left. Sub-second
+  // steps are the only way to land inside that window — a whole-second sweep
+  // steps straight over it.
+  for (let ms = at(2026, 9, 10, 0, 59, 0); ms < at(2026, 9, 10, 1, 1, 0); ms += 37) {
+    const state = S.stateAt(ms)
+    if (state.secondsToSwitch === 0) {
+      assert.ok(ms >= state.nextSwitchMs,
+        `read 0s at ${iso(ms)} with the switch still ahead at ${iso(state.nextSwitchMs)}`)
+    }
+    if (state.secondsToOffPeakEnd === 0) {
+      assert.ok(ms >= state.offPeakEndMs,
+        `read 0s of off-peak at ${iso(ms)} with it ending at ${iso(state.offPeakEndMs)}`)
+    }
+  }
+
+  // One millisecond before the boundary is one second on the clock, and the
+  // state has not flipped. Those are the two facts rounding got wrong.
+  const before = S.stateAt(at(2026, 9, 10, 1, 0, 0) - 1)
+  assert.strictEqual(before.secondsToSwitch, 1, "1ms before the switch must read 1s")
+  assert.strictEqual(before.peak, false, "and must not have flipped yet")
+
+  // At the boundary the new window is already in force — half-open, so 01:00 is
+  // peak — and the countdown is that window's full length rather than zero.
+  const boundary = S.stateAt(at(2026, 9, 10, 1, 0, 0))
+  assert.strictEqual(boundary.peak, true, "01:00 UTC is peak")
+  assert.strictEqual(boundary.secondsToSwitch, 3 * 3600, "with three hours left in it")
+})
+
 check("a whole week of ticks never goes backwards or negative", () => {
   let previous
   for (let ms = at(2026, 9, 7, 0, 0); ms < at(2026, 9, 14, 0, 0); ms += 60 * 1000) {

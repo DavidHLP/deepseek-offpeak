@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "david.deepseek-offpeak",
+  "name": "DeepSeek Off-Peak",
+  "version": "0.1.0",
+  "author": "David",
+  "license": "MIT",
+  "description": "DeepSeek peak/off-peak billing state, countdown to the next change, an optional account balance readout, and a notification when off-peak starts. Computed locally from the published UTC timetable — never guessed from server load or API health.",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "DeepSeek",
+    "description": "DeepSeek peak or off-peak pricing with a countdown to the next change",
+    "category": "System",
+    "aliases": ["deepseek", "off-peak", "peak", "billing"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

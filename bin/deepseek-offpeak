@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+// deepseek-offpeak status [--json]
+// deepseek-offpeak refresh
+//
+// Answers from the local timetable, so it works with the shell closed and with
+// api.deepseek.com unreachable. The schedule comes from lib/Schedule.js — the
+// same module the bar and panel render — and the text and JSON come from
+// lib/Status.js, so this cannot disagree with the widget.
+//
+// The balance is the only part that touches the network, it is queried only
+// when asked (status does read it, since that is the point of the command),
+// and its failure is one line that leaves everything above it intact.
+
+const path = require("path")
+const os = require("os")
+const { spawnSync } = require("child_process")
+const Schedule = require(path.join(__dirname, "..", "lib", "Schedule.js"))
+const Balance = require(path.join(__dirname, "..", "lib", "Balance.js"))
+const Status = require(path.join(__dirname, "..", "lib", "Status.js"))
+
+const USAGE = `Usage: deepseek-offpeak status [--json]
+       deepseek-offpeak refresh
+
+  status           Current pricing state, the countdown to the next change, and
+                   the account balance when DEEPSEEK_API_KEY is set.
+  status --json    The same facts as one JSON object.
+  refresh          Re-query the balance and print the status again.
+
+The pricing state is computed locally from DeepSeek's published UTC timetable
+and never from the API: status answers even when api.deepseek.com is
+unreachable, and a balance failure gets its own line.
+`
+
+// Where the key came from, and the key itself. Environment first — it is free
+// to read — then the user's shell startup files, since exporting the key from
+// ~/.bashrc is the common setup and a graphical session never sources it.
+//
+// This is the same order Service.qml resolves in, and it has to be: an
+// interactive bash inherits this environment, so a shell-first order would let
+// a ~/.bashrc export override a key that is already set, and the widget and
+// this command would then query the API with different credentials.
+//
+// The bash invocation passes no secret: the command line names a variable, and
+// the value comes back on stdout. `-i` is required because ~/.bashrc is sourced
+// only by interactive shells, and HISTFILE is neutralised so the lookup cannot
+// write to the user's history.
+function resolveApiKey() {
+  const fromEnvironment = String(process.env.DEEPSEEK_API_KEY || "")
+  if (Balance.isUsableKey(fromEnvironment)) return { key: fromEnvironment, source: "environment" }
+
+  // The same decision the shell's service makes, so the two cannot disagree
+  // about when a shell lookup is warranted. Running the command is the user
+  // asking, so the reason is "manual"; a one-shot process never has a lookup in
+  // flight and never re-arms, so it always lands on "resolve" here.
+  const action = Balance.apiKeyAction("pending", false, false, "manual")
+  if (action !== "resolve") return { key: "", source: "" }
+
+  const child = spawnSync("bash", ["-ic", Balance.KEY_RESOLUTION_SCRIPT], {
+    encoding: "utf8",
+    env: { ...process.env, HISTFILE: "/dev/null" }
+  })
+  const fromShell = Balance.keyFromShellOutput(child.stdout || "")
+  if (Balance.isUsableKey(fromShell)) return { key: fromShell, source: "shell" }
+  return { key: "", source: "" }
+}
+
+function queryBalance(apiKey) {
+  if (!Balance.isUsableKey(apiKey)) {
+    return { status: "error", error: Balance.ERROR_MISSING_API_KEY, balances: [], isAvailable: false, updatedAtMs: 0 }
+  }
+
+  // The environment is spread, not replaced. spawnSync() replaces the child's
+  // environment outright when `env` is given, so passing only PATH and HOME
+  // drops HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE — and a machine
+  // that reaches the API through a proxy or a custom CA would fail here with
+  // network_error while the identical request succeeds from the user's shell.
+  const child = spawnSync("bash", ["-c", Balance.BALANCE_REQUEST_SCRIPT], {
+    input: apiKey + "\n",
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+      HOME: os.homedir()
+    }
+  })
+
+  if (child.error) {
+    return { status: "error", error: Balance.ERROR_NETWORK, balances: [], isAvailable: false, updatedAtMs: 0 }
+  }
+
+  const result = Balance.fromResponse(child.status, child.stdout || "")
+  if (!result.ok) {
+    return { status: "error", error: result.error, balances: [], isAvailable: false, updatedAtMs: 0 }
+  }
+  return {
+    status: "ok",
+    error: "",
+    isAvailable: result.isAvailable,
+    balances: result.balances,
+    updatedAtMs: Date.now()
+  }
+}
+
+function main(argv) {
+  const command = argv[0]
+  if (!command || command === "-h" || command === "--help" || command === "help") {
+    process.stdout.write(USAGE)
+    return 0
+  }
+  if (command !== "status" && command !== "refresh") {
+    process.stderr.write(`deepseek-offpeak: unknown command '${command}'\n\n${USAGE}`)
+    return 2
+  }
+
+  // One instant for the whole report. Calling Date.now() twice — once for the
+  // schedule and once inside statusState — can straddle a boundary and label a
+  // peak state with off-peak clocks and a negative-looking countdown.
+  const nowMs = Date.now()
+  const key = resolveApiKey()
+  const state = Schedule.statusState(Schedule.stateAt(nowMs),
+    { nowMs: nowMs, notificationsEnabled: null, apiKeySource: key.source })
+  const balance = queryBalance(key.key)
+
+  if (argv.includes("--json")) {
+    process.stdout.write(JSON.stringify(Status.object(state, balance), null, 2) + "\n")
+  } else {
+    process.stdout.write(Status.text(state, balance) + "\n")
+  }
+  return 0
+}
+
+process.exit(main(process.argv.slice(2)))

@@ -92,7 +92,9 @@ Item {
       + Schedule.formatShort(root.billing.secondsToOffPeakEnd) + " left \u00b7 "
       + "off-peak pricing until then"
 
-    notifier.command = ["notify-send", "-a", "DeepSeek Off-Peak", "-u", "low", "-t", "8000",
+    // Absolute path for the same reason curl gets one: a directory earlier on
+    // PATH must not be able to choose what the widget runs.
+    notifier.command = ["/usr/bin/notify-send", "-a", "DeepSeek Off-Peak", "-u", "low", "-t", "8000",
       summary, body]
     notifier.running = true
   }

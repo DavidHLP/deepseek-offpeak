@@ -184,13 +184,15 @@ check("the key source is reported only when there is one", () => {
     assert.ok(!Status.object(state, good).apiKeySource, "empty in JSON too")
   }
 
-  // Present: one line naming the place, and the same value in the JSON.
-  for (const [source, wording] of [["environment", "process environment"],
-    ["shell", "~/.bashrc"]]) {
+  // Present: one line naming the place, and the same value in the JSON. The
+  // environment is the only place the key is read from, so it is the only
+  // source this line can name.
+  {
+    const source = "environment"
     const state = Object.assign({}, base, { apiKeySource: source })
     const rendered = Status.text(state, good)
     assert.ok(rendered.includes("Key source:"), rendered)
-    assert.ok(rendered.includes(wording), rendered)
+    assert.ok(rendered.includes("process environment"), rendered)
     assert.strictEqual(Status.object(state, good).apiKeySource, source)
   }
 

@@ -44,11 +44,29 @@ omarchy plugin remove deepseek-offpeak
 ## The balance (optional)
 
 The balance is the only part that touches the network, and it is strictly
-additive — every failure path leaves the schedule untouched. Export
-`DEEPSEEK_API_KEY` into the session that starts omarchy-shell (a graphical
-session does not read `~/.bashrc`, so exporting it there does not reach the
-shell). The environment is the only place the key is read from: running your
-startup files to look for it would mean the widget executing them as code.
+additive — every failure path leaves the schedule untouched. The environment is
+the only place the key is read from: running your startup files to look for it
+would mean the widget executing them as code.
+
+`~/.bashrc` is not enough. The shell is started by Hyprland, not by a terminal,
+so an export there reaches your terminals and never the bar. Put the key where
+the session gets its environment — in `~/.config/hypr/env.lua`:
+
+```lua
+hl.env("DEEPSEEK_API_KEY", "sk-…")
+```
+
+and load it from `~/.config/hypr/hyprland.lua` *before* the autostart line, so
+the shell is spawned with it:
+
+```lua
+require("hypr.env")
+require("hypr.autostart")
+```
+
+Then `hyprctl reload` and `omarchy restart shell`. (`hyprctl setenv` does not
+exist in every Hyprland build — check `hyprctl setenv FOO bar` before relying on
+it. `~/.config/environment.d/` works too, but only after a fresh login.)
 
 Money stays a string end to end. The API sends decimals like `"110.00"`, and
 parsing them into floats only to re-print them invents rounding.

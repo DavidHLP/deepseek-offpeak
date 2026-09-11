@@ -148,7 +148,7 @@ check("the local offset label is a real offset, and reflects the zone", () => {
 check("the JSON document is one object a script can parse", () => {
   const json = Status.object(stateAt(at(2026, 9, 9, 2, 30), true), good)
   const round = JSON.parse(JSON.stringify(json))
-  assert.strictEqual(round.id, "david.deepseek-offpeak")
+  assert.strictEqual(round.id, "deepseek-offpeak")
   assert.ok(["peak", "off-peak"].includes(round.state))
   assert.strictEqual(typeof round.secondsToSwitch, "number")
   assert.ok(round.secondsToSwitch >= 0)

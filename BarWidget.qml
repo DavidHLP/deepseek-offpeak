@@ -12,9 +12,9 @@ import "lib/Schedule.js" as Schedule
 // and the balance immediately instead of waiting for the next poll.
 BarWidget {
   id: root
-  moduleName: "david.deepseek-offpeak"
+  moduleName: "deepseek-offpeak"
 
-  readonly property var service: bar && bar.shell ? bar.shell.serviceFor("david.deepseek-offpeak") : null
+  readonly property var service: bar && bar.shell ? bar.shell.serviceFor("deepseek-offpeak") : null
 
   readonly property bool peak: service ? service.peak : false
   readonly property string phaseLabel: service ? service.phaseLabel : "\u2014"
@@ -85,7 +85,7 @@ BarWidget {
   // shows. (An IpcHandler on the service would be a second handler for the
   // same target, which only one of them can serve.)
   IpcHandler {
-    target: "david.deepseek-offpeak"
+    target: "deepseek-offpeak"
 
     function status(): string {
       return root.service ? root.service.statusText() : "DeepSeek Off-Peak service is not running"
@@ -94,7 +94,7 @@ BarWidget {
     function statusJson(): string {
       return root.service
         ? JSON.stringify(root.service.statusObject(), null, 2)
-        : JSON.stringify({ id: "david.deepseek-offpeak", error: "service_unavailable" }, null, 2)
+        : JSON.stringify({ id: "deepseek-offpeak", error: "service_unavailable" }, null, 2)
     }
 
     function refresh(): string {

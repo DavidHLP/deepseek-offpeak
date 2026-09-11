@@ -18,13 +18,13 @@ import qs.Commons
 // exactly how the balance total first rendered as "0.7" instead of "0.71".
 Panel {
   id: root
-  moduleName: "david.deepseek-offpeak"
+  moduleName: "deepseek-offpeak"
 
   property var anchorItem: null
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
 
-  readonly property var service: bar && bar.shell ? bar.shell.serviceFor("david.deepseek-offpeak") : null
+  readonly property var service: bar && bar.shell ? bar.shell.serviceFor("deepseek-offpeak") : null
 
   readonly property bool peak: service ? service.peak : false
   readonly property string phaseLabel: service ? service.phaseLabel : "Loading"

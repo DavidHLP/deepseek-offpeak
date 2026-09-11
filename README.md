@@ -22,13 +22,24 @@ about, so nothing reads the clock implicitly.
 
 ## Install
 
-Install through Omarchy's plugin mechanism, or drop the directory into
-`~/.config/omarchy/plugins/david.deepseek-offpeak`.
+```sh
+omarchy plugin add https://github.com/DavidHLP/deepseek-offpeak.git --enable
+```
+
+Omarchy clones the repository, validates the manifest, and only then installs
+and enables the plugin. To install by hand, drop the directory into
+`~/.config/omarchy/plugins/david.deepseek-offpeak` instead.
 
 Add the bar widget from the bar's widget picker — it registers as **DeepSeek**
 in the **System** category. Clicking it opens the panel; a middle click
 re-reads the schedule and the balance immediately instead of waiting for the
 next poll.
+
+## Remove
+
+```sh
+omarchy plugin remove david.deepseek-offpeak
+```
 
 ## The balance (optional)
 

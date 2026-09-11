@@ -44,10 +44,11 @@ omarchy plugin remove deepseek-offpeak
 ## The balance (optional)
 
 The balance is the only part that touches the network, and it is strictly
-additive — every failure path leaves the schedule untouched. Set
-`DEEPSEEK_API_KEY` in your environment, or export it from `~/.bashrc`; the
-plugin checks the environment first and your shell startup files second, since
-a graphical session never sources `~/.bashrc`.
+additive — every failure path leaves the schedule untouched. Export
+`DEEPSEEK_API_KEY` into the session that starts omarchy-shell (a graphical
+session does not read `~/.bashrc`, so exporting it there does not reach the
+shell). The environment is the only place the key is read from: running your
+startup files to look for it would mean the widget executing them as code.
 
 Money stays a string end to end. The API sends decimals like `"110.00"`, and
 parsing them into floats only to re-print them invents rounding.
@@ -62,8 +63,9 @@ Failures are reported one line at a time, never swallowed:
 | `invalid_response` | a 200 that is not the documented JSON shape |
 
 The key is never passed as an argument, so the command line is safe to show in
-`ps`, and the shell lookup runs with `HISTFILE=/dev/null` so it cannot write to
-your history.
+`ps`. The request names `bash` and `curl` by absolute path, caps the response at
+64 KiB, and is killed if it outlives 15 seconds — a balance readout should not
+be able to spend the shell's memory or its patience.
 
 ## CLI
 

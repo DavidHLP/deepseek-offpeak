@@ -68,7 +68,7 @@ Panel {
 
   function activateCursor() {
     if (root.cursor === 0) root.timelineExpanded = !root.timelineExpanded
-    else if (root.cursor === 1 && root.service) root.service.refreshBalance(true)
+    else if (root.cursor === 1 && root.service) root.service.refreshBalance()
     else if (root.cursor === 2 && root.service) root.service.setNotificationsEnabled(!root.service.notificationsEnabled)
   }
 
@@ -616,7 +616,7 @@ Panel {
               cursorIndex: 1
               label: "Balance"
               hint: root.balanceLoading ? "loading" : (root.service ? root.service.balanceUpdatedLabel : "")
-              onActivated: if (root.service) root.service.refreshBalance(true)
+              onActivated: if (root.service) root.service.refreshBalance()
 
               trailingControl: Component {
                 PanelActionButton {
@@ -625,7 +625,7 @@ Panel {
                   foreground: root.contentForeground
                   hasCursor: root.cursor === 1
                   enabled: !root.balanceLoading
-                  onClicked: if (root.service) root.service.refreshBalance(true)
+                  onClicked: if (root.service) root.service.refreshBalance()
                 }
               }
             }

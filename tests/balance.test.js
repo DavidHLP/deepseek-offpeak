@@ -138,9 +138,10 @@ check("the key alphabet rejects curl-config metacharacters, not just whitespace"
     "sk-\u00e9", "sk-\u4e2d"]) {
     assert.strictEqual(B.isUsableKey(bad), false, `${JSON.stringify(bad)} must be rejected`)
   }
-  // A real key: "sk-" plus 32 hex characters.
+  // A real key: "sk-" plus 32 hex characters. The alphabet and the length
+  // ceiling are separate rules; the ceiling has its own check below.
   for (const good of ["sk-" + "a".repeat(32), "sk-ABC-def_4560123456789",
-    "sk-" + "x".repeat(200), "sk-" + "0".repeat(16)]) {
+    "sk-" + "x".repeat(61), "sk-" + "0".repeat(16)]) {
     assert.strictEqual(B.isUsableKey(good), true, `${good} should be accepted`)
   }
   // Not the documented shape: no prefix, too short, wrong characters, not a
@@ -177,108 +178,40 @@ check("the shared request script keeps the key out of argv", () => {
   assert.ok(script.includes('-w "\\n%{http_code}"'), "status code appended")
   assert.ok(script.includes("https://api.deepseek.com/user/balance"), "documented endpoint")
 
+  // curl is named by absolute path, so nothing earlier on PATH decides what
+  // runs, and the transfer is capped in bytes rather than only in seconds.
+  assert.ok(script.includes(B.CURL_BINARY), script)
+  assert.ok(B.CURL_BINARY.startsWith("/"), "curl must be an absolute path")
+  assert.ok(!/(^|\s|\|)curl\s/.test(script), "curl is never resolved through PATH")
+  assert.ok(script.includes("--max-filesize " + B.MAX_RESPONSE_BYTES),
+    "the body is capped in bytes, not just in time")
+
   // The same text must be what both runtimes execute: the string is exported,
   // so this assertion is the single definition.
   assert.strictEqual(B.BALANCE_REQUEST_SCRIPT, script)
 })
 
-check("the shell lookup adopts only a plausible key from its output", () => {
-  const key = "sk-" + "abc123def456".repeat(3)  // a realistic-length key
-
-  // The ordinary case: the key alone, with or without surrounding whitespace.
-  assert.strictEqual(B.keyFromShellOutput(key), key)
-  assert.strictEqual(B.keyFromShellOutput(key + "\n"), key)
-  assert.strictEqual(B.keyFromShellOutput("  " + key + "  \n"), key)
-
-  // ~/.bashrc is the user's own file: banners and greetings come first, and the
-  // export lands last. The scan takes the last plausible line.
-  assert.strictEqual(B.keyFromShellOutput("Welcome to bash!\n" + key), key)
-  assert.strictEqual(B.keyFromShellOutput("nvm: v20 loaded\n" + key + "\n"), key)
-  // A prompt-like trailing line must not win over a real key.
-  assert.strictEqual(B.keyFromShellOutput(key + "\n$ "), key)
-
-  // Nothing usable is nothing, never a guess: an empty var, prompt noise, and
-  // values that isUsableKey rejects (quotes, backslashes, whitespace).
-  for (const output of ["", "\n", "bash: no job control in this shell", "$ ", "  ",
-    "sk-a b", 'sk-a"b', "sk-a\\b", "[nvm] loaded"]) {
-    assert.strictEqual(B.keyFromShellOutput(output), "", JSON.stringify(output))
-  }
-  assert.strictEqual(B.keyFromShellOutput(null), "")
-  assert.strictEqual(B.keyFromShellOutput(undefined), "")
-
-  // A key on an earlier line is still found if nothing later is plausible.
-  assert.strictEqual(B.keyFromShellOutput(key + "\nDone."), key)
+check("a key longer than the ceiling is not a key", () => {
+  // The bound exists so nothing unbounded — a hostile environment, a secret
+  // provider writing a wall of text — is held in memory and pushed through a
+  // config line. A real key is about 35 characters.
+  assert.strictEqual(B.isUsableKey("sk-" + "a".repeat(B.KEY_MAX_LENGTH - 3)), true,
+    "exactly at the ceiling")
+  assert.strictEqual(B.isUsableKey("sk-" + "a".repeat(B.KEY_MAX_LENGTH - 2)), false,
+    "one character over the ceiling")
+  assert.strictEqual(B.isUsableKey("sk-" + "a".repeat(4096)), false, "a wall of text")
 })
 
-check("the shell lookup asks for the key without ever passing it", () => {
-  const script = B.KEY_RESOLUTION_SCRIPT
-  assert.strictEqual(typeof script, "string")
-  // Prints the value of the variable; names it, never inlines it.
-  assert.ok(script.includes("DEEPSEEK_API_KEY"), script)
-  assert.ok(script.includes("printf"), script)
-  // No secret literal, and the script carries no value of its own.
-  assert.ok(!/sk-/.test(script), "the script must not embed a key")
-})
+check("an oversized response is invalid_response, not a parse", () => {
+  // curl aborts the transfer itself at --max-filesize, and reports 63.
+  assert.deepStrictEqual(B.fromResponse(63, ""), { ok: false, error: "invalid_response" })
+  // Belt and braces for anything else that hands a body in: the same bound is
+  // applied to the text before it is parsed.
+  const huge = good + " ".repeat(B.MAX_RESPONSE_BYTES) + "\n200"
+  assert.deepStrictEqual(B.fromResponse(0, huge), { ok: false, error: "invalid_response" })
 
-check("the key lookup terminates when there is no key anywhere", () => {
-  const A = B.apiKeyAction
-
-  // THE BUG THIS GUARDS: the resolver's own completion handler asks for a
-  // balance when the lookup finishes. If that re-armed the lookup, a machine
-  // with no key would restart interactive bash the instant each one exited,
-  // forever.
-  let state = "pending"
-  const seen = []
-  const tick = (reason) => {
-    const action = A(state, false, false, reason)
-    seen.push(action)
-    if (action === "resolve") state = "resolving"
-    else if (action === "report-missing") state = "ready"
-    return action
-  }
-  // A cold start, then 200 completion passes: exactly one resolve.
-  assert.strictEqual(tick("poll"), "resolve")
-  state = "ready"                       // as onExited would leave it
-  for (let i = 0; i < 200; i++) tick("completion")
-  assert.strictEqual(seen.filter((a) => a === "resolve").length, 1,
-    `200 completion passes must not re-resolve: ${seen.slice(0, 6)}`)
-
-  // A poll and a manual refresh do look again with no key held — that is how a
-  // newly exported key is picked up without restarting the shell.
-  assert.strictEqual(tick("poll"), "resolve")
-  state = "ready"
-  assert.strictEqual(tick("manual"), "resolve")
-
-  // Settled and unasked, the answer is the same one every time.
-  assert.strictEqual(A("ready", false, false, "completion"), "report-missing")
-})
-
-check("a held key is left alone by the poll but re-read by a manual refresh", () => {
-  const A = B.apiKeyAction
-
-  // The poll runs every five minutes. Re-resolving there would spawn an
-  // interactive bash 288 times a day for the common case where the key in
-  // hand is fine.
-  for (const state of ["pending", "ready"]) {
-    assert.strictEqual(A(state, true, false, "poll"), "request", `poll, key held, ${state}`)
-  }
-
-  // ...but a rotated or revoked key must not be sent forever. Nothing else
-  // re-reads a key that works, so the manual refresh has to.
-  for (const state of ["pending", "ready"]) {
-    assert.strictEqual(A(state, true, false, "manual"), "resolve", `manual, key held, ${state}`)
-  }
-
-  // A lookup already in flight wins over everything: never two at once.
-  assert.strictEqual(A("resolving", false, false, "manual"), "wait")
-  assert.strictEqual(A("resolving", false, true, "poll"), "wait", "even when forced")
-  assert.strictEqual(A("resolving", true, false, "manual"), "wait", "even with a key held")
-  assert.strictEqual(A("pending", true, true, "poll"), "wait")
-
-  // A first run finds a key, whatever asked for it.
-  assert.strictEqual(A("pending", false, false, "poll"), "resolve")
-  assert.strictEqual(A("pending", false, false, "completion"), "resolve")
-  assert.strictEqual(A("ready", false, false, "manual"), "resolve")
+  // A body right at the bound is still read normally.
+  assert.strictEqual(B.fromResponse(0, good + "\n200").ok, true)
 })
 
 console.log(`balance: ${checks} checks passed`)

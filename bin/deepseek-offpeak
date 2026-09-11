@@ -31,36 +31,14 @@ and never from the API: status answers even when api.deepseek.com is
 unreachable, and a balance failure gets its own line.
 `
 
-// Where the key came from, and the key itself. Environment first — it is free
-// to read — then the user's shell startup files, since exporting the key from
-// ~/.bashrc is the common setup and a graphical session never sources it.
-//
-// This is the same order Service.qml resolves in, and it has to be: an
-// interactive bash inherits this environment, so a shell-first order would let
-// a ~/.bashrc export override a key that is already set, and the widget and
-// this command would then query the API with different credentials.
-//
-// The bash invocation passes no secret: the command line names a variable, and
-// the value comes back on stdout. `-i` is required because ~/.bashrc is sourced
-// only by interactive shells, and HISTFILE is neutralised so the lookup cannot
-// write to the user's history.
+// Where the key came from, and the key itself. The environment is the only
+// place it is read from — the same rule Service.qml follows, so the widget and
+// this command cannot query the API with different credentials. (Neither runs
+// an interactive shell to pick the key out of ~/.bashrc: that executes the
+// user's startup files as code, which a status readout has no business doing.)
 function resolveApiKey() {
   const fromEnvironment = String(process.env.DEEPSEEK_API_KEY || "")
   if (Balance.isUsableKey(fromEnvironment)) return { key: fromEnvironment, source: "environment" }
-
-  // The same decision the shell's service makes, so the two cannot disagree
-  // about when a shell lookup is warranted. Running the command is the user
-  // asking, so the reason is "manual"; a one-shot process never has a lookup in
-  // flight and never re-arms, so it always lands on "resolve" here.
-  const action = Balance.apiKeyAction("pending", false, false, "manual")
-  if (action !== "resolve") return { key: "", source: "" }
-
-  const child = spawnSync("bash", ["-ic", Balance.KEY_RESOLUTION_SCRIPT], {
-    encoding: "utf8",
-    env: { ...process.env, HISTFILE: "/dev/null" }
-  })
-  const fromShell = Balance.keyFromShellOutput(child.stdout || "")
-  if (Balance.isUsableKey(fromShell)) return { key: fromShell, source: "shell" }
   return { key: "", source: "" }
 }
 
@@ -70,16 +48,24 @@ function queryBalance(apiKey) {
   }
 
   // The environment is spread, not replaced. spawnSync() replaces the child's
-  // environment outright when `env` is given, so passing only PATH and HOME
-  // drops HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE — and a machine
-  // that reaches the API through a proxy or a custom CA would fail here with
+  // environment outright when `env` is given, so passing only HOME would drop
+  // HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE — and a machine that
+  // reaches the API through a proxy or a custom CA would fail here with
   // network_error while the identical request succeeds from the user's shell.
-  const child = spawnSync("bash", ["-c", Balance.BALANCE_REQUEST_SCRIPT], {
+  // PATH is not pinned because nothing is resolved through it: the request
+  // script names bash and curl by absolute path.
+  //
+  // timeout/maxBuffer mirror the widget's own bounds (Balance.REQUEST_TIMEOUT_MS
+  // and Balance.MAX_RESPONSE_BYTES): the shell is capped at the same 64 KiB, and
+  // a transfer that outlives the deadline is killed rather than waited on.
+  const child = spawnSync(Balance.BASH_BINARY, ["-c", Balance.BALANCE_REQUEST_SCRIPT], {
     input: apiKey + "\n",
     encoding: "utf8",
+    timeout: Balance.REQUEST_TIMEOUT_MS,
+    maxBuffer: Balance.MAX_RESPONSE_BYTES,
+    killSignal: "SIGKILL",
     env: {
       ...process.env,
-      PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
       HOME: os.homedir()
     }
   })

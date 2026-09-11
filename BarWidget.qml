@@ -20,7 +20,6 @@ BarWidget {
   readonly property string phaseLabel: service ? service.phaseLabel : "\u2014"
   readonly property string remaining: service ? service.remainingShort : ""
   readonly property real remainingSeconds: service ? service.secondsToSwitch : 0
-  readonly property string glyph: root.peak ? "\uF0599" : "\uF0594"
 
   readonly property string label: root.remaining.length > 0
     ? root.phaseLabel + " " + root.remaining : root.phaseLabel
@@ -32,7 +31,7 @@ BarWidget {
   // countdown drops to its largest unit.
   readonly property var verticalLines: {
     if (!root.vertical) return []
-    return [root.glyph, root.peak ? "Peak" : "Off", Schedule.formatCompact(root.remainingSeconds)]
+    return [root.peak ? "Peak" : "Off", Schedule.formatCompact(root.remainingSeconds)]
   }
 
   readonly property string tooltip: service
@@ -128,20 +127,20 @@ BarWidget {
 
   // The bar's open-panel mark tracks what the widget actually paints — the
   // label is a countdown, so it changes length every minute.
-  readonly property real openPanelIndicatorWidth: root.vertical ? Style.bar.iconSlot : button.labelWidth
+  readonly property real openPanelIndicatorWidth: root.vertical ? Style.bar.iconSlot : horizontalContent.implicitWidth
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
 
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical ? "" : root.glyph + " " + root.label
-    labelVisible: !root.vertical
+    labelVisible: false
     hasVisualContent: true
-    fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
+    fixedWidth: root.vertical ? -1 : horizontalContent.implicitWidth + scaledHorizontalMargin * 2
+    fixedHeight: root.vertical ? (root.verticalLines.length + 1) * Style.bar.iconSlot : -1
     horizontalMargin: 8.5
     tooltipText: root.tooltip
-    // The peak glyph is the one thing in the bar that should read as a warning.
+    // Keep the peak label's warning color alongside the DeepSeek logo.
     active: root.peak
     activeColor: root.bar ? root.bar.urgent : Color.urgent
     onPressed: function(b) {
@@ -152,9 +151,41 @@ BarWidget {
       root.togglePanel()
     }
 
+    Row {
+      id: horizontalContent
+      visible: !root.vertical
+      anchors.centerIn: parent
+      spacing: Style.space(5)
+
+      Image {
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.font.icon
+        height: Style.font.icon
+        source: Qt.resolvedUrl("assets/deepseek.svg")
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+      }
+
+      Text {
+        text: root.label
+        color: root.peak ? button.activeColor : button.foreground
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+        renderType: Text.NativeRendering
+      }
+    }
+
     Column {
       visible: root.vertical
       anchors.fill: parent
+
+      Image {
+        width: button.width
+        height: Style.bar.iconSlot
+        source: Qt.resolvedUrl("assets/deepseek.svg")
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+      }
 
       Repeater {
         model: root.verticalLines
@@ -169,10 +200,10 @@ BarWidget {
           width: button.width
           height: Style.bar.iconSlot
           text: modelData
-          color: modelData === root.glyph && root.peak ? button.activeColor : button.foreground
+          color: modelData === "Peak" ? button.activeColor : button.foreground
           font.family: button.fontFamily
-          font.pixelSize: modelData === root.glyph ? Style.font.icon : Style.font.body
-          fontSizeMode: modelData === root.glyph ? Text.FixedSize : Text.Fit
+          font.pixelSize: Style.font.body
+          fontSizeMode: Text.Fit
           minimumPixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
           verticalAlignment: Text.AlignVCenter

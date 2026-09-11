@@ -11,7 +11,6 @@
 // when asked (status does read it, since that is the point of the command),
 // and its failure is one line that leaves everything above it intact.
 
-const fs = require("fs")
 const path = require("path")
 const os = require("os")
 const { spawnSync } = require("child_process")
@@ -44,22 +43,25 @@ function resolveApiKey() {
   if (Balance.isUsableKey(fromEnvironment))
     return { key: fromEnvironment, source: "environment", error: "" }
 
+  // The widget reads the file with `head -c KEY_FILE_READ_BYTES`; this reads the
+  // same number of bytes and gives them to the same decision function, so the
+  // two cannot disagree about what the file says. Reading more than that is the
+  // thing to avoid: the size of a file is not knowable without reading it, and
+  // the file belongs to the user, not to this command.
   const keyPath = Balance.keyFilePath(process.env.XDG_CONFIG_HOME, os.homedir())
-  let stat = null
-  try {
-    stat = fs.statSync(keyPath)
-  } catch (e) {
-    stat = null
-  }
-  // No key file is not a broken key file; the size is checked before the read,
-  // so an oversized one is never loaded.
-  if (!stat || !stat.isFile() || stat.size > Balance.KEY_FILE_MAX_BYTES)
-    return { key: "", source: "", error: "" }
-
-  const fromFile = Balance.parseKeyFile(fs.readFileSync(keyPath, "utf8"))
-  if (fromFile === "")
-    return { key: "", source: "", error: Balance.ERROR_INVALID_KEY_FILE }
-  return { key: fromFile, source: "file", error: "" }
+  // Use the same bounded helper as the widget. A synchronous fs.readSync() can
+  // block forever on a named pipe or device, while this direct child can be
+  // killed at the read deadline.
+  const child = spawnSync(Balance.HEAD_BINARY, [
+    "-c", String(Balance.KEY_FILE_READ_BYTES), "--", keyPath
+  ], {
+    encoding: "utf8",
+    timeout: Balance.KEY_FILE_READ_TIMEOUT_MS,
+    maxBuffer: Balance.KEY_FILE_READ_BYTES,
+    killSignal: "SIGKILL"
+  })
+  const resolved = Balance.keyFileResult(child.stdout || "", child.status === 0)
+  return { key: resolved.key, source: resolved.key === "" ? "" : "file", error: resolved.error }
 }
 
 function queryBalance(apiKey, keyError) {

@@ -29,7 +29,6 @@ Panel {
   readonly property bool peak: service ? service.peak : false
   readonly property string phaseLabel: service ? service.phaseLabel : "Loading"
   readonly property color phaseColor: root.peak ? Color.urgent : Color.accent
-  readonly property string glyph: root.peak ? "\uF0599" : "\uF0594"
 
   readonly property var balances: service ? service.balanceBalances : []
   readonly property string balanceMessage: service ? service.balanceMessage : ""
@@ -323,12 +322,12 @@ Panel {
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             iconComponent: Component {
-              Text {
-                textFormat: Text.PlainText
-                text: root.glyph
-                color: root.phaseColor
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.display
+              Image {
+                width: Style.font.display
+                height: Style.font.display
+                source: Qt.resolvedUrl("assets/deepseek.svg")
+                fillMode: Image.PreserveAspectFit
+                smooth: true
               }
             }
           }

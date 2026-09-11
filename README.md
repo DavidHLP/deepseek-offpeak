@@ -47,8 +47,8 @@ The balance is the only part that touches the network, and it is strictly
 additive — every failure path leaves the schedule untouched. The key is read
 from two places, in this order:
 
-1. **the key file**, `~/.config/deepseek-offpeak/key`;
-2. **the environment**, `DEEPSEEK_API_KEY`, which wins when it is set.
+1. **the environment**, `DEEPSEEK_API_KEY`;
+2. **the key file**, `~/.config/deepseek-offpeak/key`, as a fallback.
 
 ```sh
 umask 077

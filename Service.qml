@@ -131,8 +131,12 @@ Item {
   property var balanceBalances: []
   property bool balanceIsAvailable: false
   property double balanceUpdatedAt: 0
-  // Single-flight latch: one request at a time, by construction.
+  // Single-flight latch: one request at a time, by construction. The key-file
+  // read is part of the same single flight, so it gets its own latch rather
+  // than sharing one — a read that finishes must not look like a request that
+  // finished.
   property bool balanceBusy: false
+  property bool keyReadBusy: false
 
   // ---------------------------------------------- API key resolution
   //
@@ -152,39 +156,60 @@ Item {
   readonly property string keyFilePath: Balance.keyFilePath(
     Quickshell.env("XDG_CONFIG_HOME"), Quickshell.env("HOME"))
 
-  // Read, never executed: the file is parsed by Balance.parseKeyFile, which
-  // takes one sk-… line and rejects everything else. `blockLoading` keeps the
-  // read synchronous, so a refresh sees the file as it is now rather than as it
-  // was when the shell started; `printErrors` is off because a missing file is
-  // a normal state — most users have no key file — and not an error to log.
-  FileView {
-    id: keyFile
-    path: ""
-    blockLoading: true
-    printErrors: false
+  // The key file is read with `head -c`, not with Quickshell's FileView, and the
+  // reason is the same one that bounds the balance request: FileView reads a
+  // whole file into a QML string first and asks questions later — measured at
+  // 191 MB read into memory from a file this plugin was pointed at. `head -c`
+  // stops at KEY_FILE_READ_BYTES whatever the file is, so the buffer has a
+  // ceiling no matter what is on disk.
+  //
+  // `--` ends the options, so a path that begins with a dash is a path.
+  // Nothing is sourced or executed: what comes back is parsed by
+  // Balance.keyFileResult, which takes one sk-… line and rejects the rest.
+  Process {
+    id: keyRead
+    property int exitCode: -1
+    property bool stdoutDone: false
+    property string stdoutText: ""
+    command: [Balance.HEAD_BINARY, "-c", String(Balance.KEY_FILE_READ_BYTES), "--",
+      root.keyFilePath]
+
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        keyRead.stdoutText = String(text || "")
+        keyRead.stdoutDone = true
+        root.finishKeyRead()
+      }
+    }
+
+    onExited: function(code) {
+      keyRead.exitCode = code
+      root.finishKeyRead()
+    }
+
+    onRunningChanged: {
+      if (running) return
+      if (!root.keyReadBusy) return
+      Qt.callLater(root.recoverStuckKeyRead)
+    }
   }
 
-  // The key and where it came from, or the error to report instead.
-  function resolveApiKey() {
-    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
-    if (Balance.isUsableKey(fromEnvironment))
-      return { key: fromEnvironment, source: "environment", error: "" }
+  // A read that never finished — a named pipe with no writer, a directory in
+  // the file's place — is not a key, and must not leave the latch closed.
+  Timer {
+    id: keyReadWatchdog
+    interval: Balance.KEY_FILE_READ_TIMEOUT_MS
+    repeat: false
+    onTriggered: keyRead.running = false
+  }
 
-    try {
-      // Re-assigned so the view reads again rather than answering from the
-      // first read it ever did.
-      keyFile.path = ""
-      keyFile.path = root.keyFilePath
-      var fromFile = Balance.parseKeyFile(keyFile.text())
-      if (fromFile !== "") return { key: fromFile, source: "file", error: "" }
-      // A file that exists and does not parse is a different problem from no
-      // key at all, and one the user can fix — so it is reported as itself.
-      if (keyFile.loaded) return { key: "", source: "", error: Balance.ERROR_INVALID_KEY_FILE }
-    } catch (e) {
-      // A read that throws — no file, no permission, a directory in its place —
-      // is the same as no key file.
-    }
-    return { key: "", source: "", error: Balance.ERROR_MISSING_API_KEY }
+  function recoverStuckKeyRead() {
+    if (!root.keyReadBusy) return
+    if (keyRead.exitCode !== -1) return
+    keyReadWatchdog.stop()
+    root.keyReadBusy = false
+    root.reportKeyProblem(Balance.ERROR_MISSING_API_KEY)
   }
 
   readonly property string balanceMessage: Balance.describe(root.balanceResult)
@@ -222,24 +247,58 @@ Item {
   // key-handling path cannot drift between the two.
   readonly property var balanceArguments: [Balance.CURL_BINARY].concat(Balance.CURL_ARGUMENTS)
 
-  function refreshBalance() {
-    if (root.balanceBusy) return false
+  // No usable key is not a request: report it and leave the schedule and every
+  // later retry untouched.
+  function reportKeyProblem(error) {
+    root.apiKey = ""
+    root.apiKeySource = ""
+    root.balanceStatus = "error"
+    root.balanceError = error
+    root.balanceIsAvailable = false
+    root.balanceBalances = []
+    root.balanceUpdatedAt = 0
+    return false
+  }
 
-    var resolved = root.resolveApiKey()
+  function finishKeyRead() {
+    if (!root.keyReadBusy) return
+    if (keyRead.exitCode === -1) return
+    if (!keyRead.stdoutDone) return
+
+    root.keyReadBusy = false
+    keyReadWatchdog.stop()
+
+    // head exits nonzero when there was no file to read, which is the
+    // difference between "no key file" and "a key file that is not a key".
+    var resolved = Balance.keyFileResult(keyRead.stdoutText, keyRead.exitCode === 0)
+    if (resolved.key === "") return root.reportKeyProblem(resolved.error)
+
     root.apiKey = resolved.key
-    root.apiKeySource = resolved.source
+    root.apiKeySource = "file"
+    root.startBalanceRequest()
+  }
 
-    if (resolved.key === "") {
-      // No usable key is not a request: report it and leave the schedule and
-      // every later retry untouched.
-      root.balanceStatus = "error"
-      root.balanceError = resolved.error
-      root.balanceIsAvailable = false
-      root.balanceBalances = []
-      root.balanceUpdatedAt = 0
-      return false
+  function refreshBalance() {
+    if (root.balanceBusy || root.keyReadBusy) return false
+
+    // The environment first, and for free: no process, no read.
+    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
+    if (Balance.isUsableKey(fromEnvironment)) {
+      root.apiKey = fromEnvironment
+      root.apiKeySource = "environment"
+      return root.startBalanceRequest()
     }
 
+    keyRead.exitCode = -1
+    keyRead.stdoutDone = false
+    keyRead.stdoutText = ""
+    root.keyReadBusy = true
+    keyRead.running = true
+    keyReadWatchdog.restart()
+    return true
+  }
+
+  function startBalanceRequest() {
     root.balanceBusy = true
     root.balanceStatus = "loading"
     root.balanceError = ""

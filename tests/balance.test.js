@@ -217,6 +217,41 @@ check("a key file is one key line, or it is nothing", () => {
     "a file exactly at the ceiling is read, not rejected for its size")
 })
 
+check("a bounded read of the key file decides like this, and only like this", () => {
+  const key = "sk-" + "abc123def456".repeat(3)
+  const R = B.keyFileResult
+
+  // A file that holds one key: the key, from the file.
+  assert.deepStrictEqual(R(key + "\n", true), { key: key, error: "" })
+
+  // A timed-out or failed read cannot adopt partial stdout, even if it already
+  // contains a complete-looking key.
+  assert.deepStrictEqual(R(key + "\n", false), { key: "", error: "missing_api_key" })
+
+  // A file that is there and is not one key line: invalid, and the user can fix
+  // it, so it is named as itself rather than as a missing key.
+  for (const text of ["", "\n", key + key, "DEEPSEEK_API_KEY=" + key, "junk\n"]) {
+    assert.deepStrictEqual(R(text, true), { key: "", error: "invalid_api_key_file" },
+      JSON.stringify(text))
+  }
+
+  // The read stops one byte past the file ceiling, so a file at that ceiling
+  // still parses — but a file larger than it arrives as too long, and the
+  // length is checked before the content, so the first line of an oversized
+  // file cannot pass for a key.
+  const atCeiling = key + "\n"
+  assert.deepStrictEqual(R(atCeiling, true), { key: key, error: "" })
+  assert.deepStrictEqual(R("x".repeat(B.KEY_FILE_MAX_BYTES), true),
+    { key: "", error: "invalid_api_key_file" }, "256 bytes of not-a-key")
+  const truncated = key + "x".repeat(B.KEY_FILE_READ_BYTES - key.length)
+  assert.strictEqual(truncated.length, B.KEY_FILE_READ_BYTES)
+  assert.deepStrictEqual(R(truncated, true), { key: "", error: "invalid_api_key_file" },
+    "an oversized file is oversized, however its first line reads")
+
+  // No file at all is missing_api_key, not invalid: there is nothing to fix.
+  assert.deepStrictEqual(R("", false), { key: "", error: "missing_api_key" })
+})
+
 check("the key file path follows the XDG variables", () => {
   assert.strictEqual(B.keyFilePath("/home/d/.config", "/home/d"),
     "/home/d/.config/deepseek-offpeak/key")

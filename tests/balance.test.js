@@ -202,6 +202,33 @@ check("a key longer than the ceiling is not a key", () => {
   assert.strictEqual(B.isUsableKey("sk-" + "a".repeat(4096)), false, "a wall of text")
 })
 
+check("the document has limits on its shape, not just on its size", () => {
+  const wrap = (payload) => JSON.stringify(payload) + "\n200"
+  const entry = (currency, total) => ({
+    currency: currency, total_balance: total, granted_balance: "0", topped_up_balance: "0"
+  })
+
+  // Cardinality: a body under the byte cap can still be one huge array.
+  const many = { is_available: true, balance_infos: [] }
+  for (let i = 0; i <= B.MAX_BALANCES; i++) many.balance_infos.push(entry("CNY", "1"))
+  assert.deepStrictEqual(B.fromResponse(0, wrap(many)), { ok: false, error: "invalid_response" },
+    "one currency over the ceiling")
+  assert.strictEqual(B.fromResponse(0, wrap({ is_available: true,
+    balance_infos: many.balance_infos.slice(0, B.MAX_BALANCES) })).ok, true, "exactly at the ceiling")
+
+  // Strings: a currency code is three letters, and an amount is a decimal — not
+  // a 16 KiB field that fits inside the byte cap.
+  assert.deepStrictEqual(B.fromResponse(0, wrap({ is_available: true,
+    balance_infos: [entry("X".repeat(B.MAX_CURRENCY_LENGTH + 1), "1")] })),
+  { ok: false, error: "invalid_response" }, "currency over the ceiling")
+  assert.deepStrictEqual(B.fromResponse(0, wrap({ is_available: true,
+    balance_infos: [entry("CNY", "1".repeat(B.MAX_AMOUNT_LENGTH + 1))] })),
+  { ok: false, error: "invalid_response" }, "amount over the ceiling")
+  assert.strictEqual(B.fromResponse(0, wrap({ is_available: true,
+    balance_infos: [entry("CNY", "1".repeat(B.MAX_AMOUNT_LENGTH))] })).ok, true,
+    "an amount at the ceiling is still a balance")
+})
+
 check("an oversized response is invalid_response, not a parse", () => {
   // curl aborts the transfer itself at --max-filesize, and reports 63.
   assert.deepStrictEqual(B.fromResponse(63, ""), { ok: false, error: "invalid_response" })

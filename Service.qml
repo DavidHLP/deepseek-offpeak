@@ -136,20 +136,56 @@ Item {
 
   // ---------------------------------------------- API key resolution
   //
-  // The key is read from the process environment (Quickshell.env) and from
-  // nowhere else. An earlier version also ran an interactive bash to pick the
-  // key out of ~/.bashrc, because exporting it there is a common setup — but
-  // that is the widget executing the user's startup files as code inside the
-  // long-lived shell process, and it is not a trade this plugin needs to make.
-  // Export DEEPSEEK_API_KEY into the session that starts omarchy-shell, or have
-  // a secret provider put it there before the shell starts.
+  // Two places, in this order: the process environment, then a key file. See
+  // lib/Balance.js for why neither of them is ~/.bashrc any more — an earlier
+  // version ran `bash -ic` for that, which is the widget executing the user's
+  // startup files as code.
   //
-  // Reading the environment costs nothing and spawns nothing, so every refresh
-  // re-reads it: a key that was exported, rotated, or revoked after startup is
-  // picked up on the next pass instead of being held until the shell restarts.
+  // Both are re-read on every refresh — the environment because reading it
+  // costs nothing, the file because the read is local — so a key that was
+  // exported, rotated, or revoked is picked up on the next pass instead of
+  // being held until the shell restarts.
   property string apiKey: ""
   property string apiKeySource: ""
   readonly property bool hasApiKey: Balance.isUsableKey(root.apiKey)
+
+  readonly property string keyFilePath: Balance.keyFilePath(
+    Quickshell.env("XDG_CONFIG_HOME"), Quickshell.env("HOME"))
+
+  // Read, never executed: the file is parsed by Balance.parseKeyFile, which
+  // takes one sk-… line and rejects everything else. `blockLoading` keeps the
+  // read synchronous, so a refresh sees the file as it is now rather than as it
+  // was when the shell started; `printErrors` is off because a missing file is
+  // a normal state — most users have no key file — and not an error to log.
+  FileView {
+    id: keyFile
+    path: ""
+    blockLoading: true
+    printErrors: false
+  }
+
+  // The key and where it came from, or the error to report instead.
+  function resolveApiKey() {
+    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
+    if (Balance.isUsableKey(fromEnvironment))
+      return { key: fromEnvironment, source: "environment", error: "" }
+
+    try {
+      // Re-assigned so the view reads again rather than answering from the
+      // first read it ever did.
+      keyFile.path = ""
+      keyFile.path = root.keyFilePath
+      var fromFile = Balance.parseKeyFile(keyFile.text())
+      if (fromFile !== "") return { key: fromFile, source: "file", error: "" }
+      // A file that exists and does not parse is a different problem from no
+      // key at all, and one the user can fix — so it is reported as itself.
+      if (keyFile.loaded) return { key: "", source: "", error: Balance.ERROR_INVALID_KEY_FILE }
+    } catch (e) {
+      // A read that throws — no file, no permission, a directory in its place —
+      // is the same as no key file.
+    }
+    return { key: "", source: "", error: Balance.ERROR_MISSING_API_KEY }
+  }
 
   readonly property string balanceMessage: Balance.describe(root.balanceResult)
 
@@ -189,22 +225,21 @@ Item {
   function refreshBalance() {
     if (root.balanceBusy) return false
 
-    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
-    if (!Balance.isUsableKey(fromEnvironment)) {
-      // No key set is not a request: report it and leave the schedule and every
-      // later retry untouched.
-      root.apiKey = ""
-      root.apiKeySource = ""
+    var resolved = root.resolveApiKey()
+    root.apiKey = resolved.key
+    root.apiKeySource = resolved.source
+
+    if (resolved.key === "") {
+      // No usable key is not a request: report it and leave the schedule and
+      // every later retry untouched.
       root.balanceStatus = "error"
-      root.balanceError = Balance.ERROR_MISSING_API_KEY
+      root.balanceError = resolved.error
       root.balanceIsAvailable = false
       root.balanceBalances = []
       root.balanceUpdatedAt = 0
       return false
     }
 
-    root.apiKey = fromEnvironment
-    root.apiKeySource = "environment"
     root.balanceBusy = true
     root.balanceStatus = "loading"
     root.balanceError = ""

@@ -44,20 +44,39 @@ omarchy plugin remove deepseek-offpeak
 ## The balance (optional)
 
 The balance is the only part that touches the network, and it is strictly
-additive — every failure path leaves the schedule untouched. The environment is
-the only place the key is read from: running your startup files to look for it
-would mean the widget executing them as code.
+additive — every failure path leaves the schedule untouched. The key is read
+from two places, in this order:
 
-`~/.bashrc` is not enough. The shell is started by Hyprland, not by a terminal,
-so an export there reaches your terminals and never the bar. Put the key where
-the session gets its environment — in `~/.config/hypr/env.lua`:
+1. **the key file**, `~/.config/deepseek-offpeak/key`;
+2. **the environment**, `DEEPSEEK_API_KEY`, which wins when it is set.
+
+```sh
+umask 077
+printf '%s\n' 'sk-your-key' > ~/.config/deepseek-offpeak/key
+```
+
+Nothing is sourced or executed to find it. The file is read and parsed, and the
+parse is strict: one line, the documented `sk-…` shape, at most 256 bytes.
+Anything else — two lines, a comment, a shell assignment, a quoted value — is
+reported as `invalid_api_key_file` rather than guessed at.
+
+**The file is the setup to prefer.** An environment variable is inherited by
+every process the session starts — terminals, editors, browsers — while a
+mode-600 file is readable only by what goes looking for it.
+
+`~/.bashrc` is not a place either of them can come from: the shell is started by
+Hyprland, not by a terminal, so an export there reaches your terminals and never
+the bar. (The plugin used to run `bash -ic` to read it. It no longer does: that
+is the widget executing your startup files as code.)
+
+If you would rather keep the key in the environment, put it where the session
+gets its environment — `~/.config/hypr/env.lua`:
 
 ```lua
 hl.env("DEEPSEEK_API_KEY", "sk-…")
 ```
 
-and load it from `~/.config/hypr/hyprland.lua` *before* the autostart line, so
-the shell is spawned with it:
+loaded from `~/.config/hypr/hyprland.lua` *before* the autostart line:
 
 ```lua
 require("hypr.env")
@@ -75,7 +94,8 @@ Failures are reported one line at a time, never swallowed:
 
 | Error | Meaning |
 | --- | --- |
-| `missing_api_key` | no usable `DEEPSEEK_API_KEY` found |
+| `missing_api_key` | no key in the environment and no key file |
+| `invalid_api_key_file` | a key file exists but is not one `sk-…` line |
 | `network_error` | curl failed — DNS, connect, TLS, or the 10s timeout |
 | `http_<code>` | the request completed with a non-200 status |
 | `invalid_response` | a 200 that is not the documented JSON shape |

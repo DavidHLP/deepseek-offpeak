@@ -11,6 +11,7 @@
 // when asked (status does read it, since that is the point of the command),
 // and its failure is one line that leaves everything above it intact.
 
+const fs = require("fs")
 const path = require("path")
 const os = require("os")
 const { spawnSync } = require("child_process")
@@ -22,7 +23,8 @@ const USAGE = `Usage: deepseek-offpeak status [--json]
        deepseek-offpeak refresh
 
   status           Current pricing state, the countdown to the next change, and
-                   the account balance when DEEPSEEK_API_KEY is set.
+                   the account balance when a key is available — from
+                   DEEPSEEK_API_KEY, or from ~/.config/deepseek-offpeak/key.
   status --json    The same facts as one JSON object.
   refresh          Re-query the balance and print the status again.
 
@@ -31,20 +33,42 @@ and never from the API: status answers even when api.deepseek.com is
 unreachable, and a balance failure gets its own line.
 `
 
-// Where the key came from, and the key itself. The environment is the only
-// place it is read from — the same rule Service.qml follows, so the widget and
-// this command cannot query the API with different credentials. (Neither runs
-// an interactive shell to pick the key out of ~/.bashrc: that executes the
-// user's startup files as code, which a status readout has no business doing.)
+// Where the key came from, and the key itself: the process environment, then
+// the key file — the same two places Service.qml reads, in the same order, so
+// the widget and this command cannot query the API with different credentials.
+// (Neither runs an interactive shell to pick the key out of ~/.bashrc: that
+// executes the user's startup files as code, which a status readout has no
+// business doing.)
 function resolveApiKey() {
   const fromEnvironment = String(process.env.DEEPSEEK_API_KEY || "")
-  if (Balance.isUsableKey(fromEnvironment)) return { key: fromEnvironment, source: "environment" }
-  return { key: "", source: "" }
+  if (Balance.isUsableKey(fromEnvironment))
+    return { key: fromEnvironment, source: "environment", error: "" }
+
+  const keyPath = Balance.keyFilePath(process.env.XDG_CONFIG_HOME, os.homedir())
+  let stat = null
+  try {
+    stat = fs.statSync(keyPath)
+  } catch (e) {
+    stat = null
+  }
+  // No key file is not a broken key file; the size is checked before the read,
+  // so an oversized one is never loaded.
+  if (!stat || !stat.isFile() || stat.size > Balance.KEY_FILE_MAX_BYTES)
+    return { key: "", source: "", error: "" }
+
+  const fromFile = Balance.parseKeyFile(fs.readFileSync(keyPath, "utf8"))
+  if (fromFile === "")
+    return { key: "", source: "", error: Balance.ERROR_INVALID_KEY_FILE }
+  return { key: fromFile, source: "file", error: "" }
 }
 
-function queryBalance(apiKey) {
+function queryBalance(apiKey, keyError) {
   if (!Balance.isUsableKey(apiKey)) {
-    return { status: "error", error: Balance.ERROR_MISSING_API_KEY, balances: [], isAvailable: false, updatedAtMs: 0 }
+    return {
+      status: "error",
+      error: keyError || Balance.ERROR_MISSING_API_KEY,
+      balances: [], isAvailable: false, updatedAtMs: 0
+    }
   }
 
   // The environment is spread, not replaced. spawnSync() replaces the child's
@@ -106,7 +130,7 @@ function main(argv) {
   const key = resolveApiKey()
   const state = Schedule.statusState(Schedule.stateAt(nowMs),
     { nowMs: nowMs, notificationsEnabled: null, apiKeySource: key.source })
-  const balance = queryBalance(key.key)
+  const balance = queryBalance(key.key, key.error)
 
   if (argv.includes("--json")) {
     process.stdout.write(JSON.stringify(Status.object(state, balance), null, 2) + "\n")

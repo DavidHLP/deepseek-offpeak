@@ -192,6 +192,46 @@ check("the request is one process, and the key is not in its argv", () => {
     "status code appended, documented endpoint last")
 })
 
+check("a key file is one key line, or it is nothing", () => {
+  const key = "sk-" + "abc123def456".repeat(3)  // a realistic 35-character key
+
+  // The ordinary shapes: the key alone, with a trailing newline, with CRLF.
+  for (const text of [key, key + "\n", "  " + key + "  \n", key + "\r\n"]) {
+    assert.strictEqual(B.parseKeyFile(text), key, JSON.stringify(text))
+  }
+
+  // Everything that is not exactly one key line is rejected rather than
+  // scavenged: a second line, a comment, a shell assignment, a quoted value, a
+  // file that is a wall of text. Reading a file is not a reason to guess.
+  for (const text of ["", "\n", "\n\n", key + "\n" + key, key + "\n# rotated Friday",
+    "DEEPSEEK_API_KEY=" + key, 'DEEPSEEK_API_KEY="' + key + '"', "export " + key,
+    key + " extra", "sk-short", "$" + key, "sk-a b", key + "\r\n" + key,
+    "x".repeat(B.KEY_FILE_MAX_BYTES + 1), null, undefined, 12345]) {
+    assert.strictEqual(B.parseKeyFile(text), "", JSON.stringify(text))
+  }
+
+  // The byte ceiling is a ceiling, not an off-by-one: a file at it parses.
+  const atCeiling = "sk-" + "a".repeat(B.KEY_FILE_MAX_BYTES - 3)
+  assert.strictEqual(atCeiling.length, B.KEY_FILE_MAX_BYTES)
+  assert.strictEqual(B.parseKeyFile(atCeiling), B.isUsableKey(atCeiling) ? atCeiling : "",
+    "a file exactly at the ceiling is read, not rejected for its size")
+})
+
+check("the key file path follows the XDG variables", () => {
+  assert.strictEqual(B.keyFilePath("/home/d/.config", "/home/d"),
+    "/home/d/.config/deepseek-offpeak/key")
+  assert.strictEqual(B.keyFilePath("/home/d/.config/", "/home/d"),
+    "/home/d/.config/deepseek-offpeak/key", "a trailing slash is not a second slash")
+  // Unset XDG_CONFIG_HOME falls back to ~/.config, which is what the variable
+  // defaults to.
+  assert.strictEqual(B.keyFilePath(undefined, "/home/d"), "/home/d/.config/deepseek-offpeak/key")
+  assert.strictEqual(B.keyFilePath("", "/home/d"), "/home/d/.config/deepseek-offpeak/key")
+  // No home and no config home is no path — never a relative one, which would
+  // resolve against the shell's working directory.
+  assert.strictEqual(B.keyFilePath("", ""), "")
+  assert.ok(!B.keyFilePath(undefined, "").startsWith("deepseek"))
+})
+
 check("a key longer than the ceiling is not a key", () => {
   // The bound exists so nothing unbounded — a hostile environment, a secret
   // provider writing a wall of text — is held in memory and pushed through a

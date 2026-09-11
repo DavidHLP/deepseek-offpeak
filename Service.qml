@@ -161,14 +161,13 @@ Item {
   readonly property string balanceUpdatedLabel: root.balanceUpdatedAt > 0
     ? Schedule.hhmmLocal(root.balanceUpdatedAt) + " local" : ""
 
-  // The key reaches curl over stdin as a config file and is written on
-  // onStarted, so it appears in no command line: `ps` and /proc/*/cmdline show
-  // argv, not a pipe.
+  // The key reaches curl through this environment and nothing else: curl reads
+  // it with `--variable %NAME` and expands it into the header, so the value
+  // appears in no command line (`ps` shows the variable's name).
   //
-  // Only HOME is pinned, and PATH is deliberately left alone: bash and curl are
-  // named by absolute path in the request script (see lib/Balance.js), so no
-  // directory on any search path decides what runs — a /usr/local/bin earlier
-  // in PATH cannot shadow either binary.
+  // Only HOME is pinned, and PATH is deliberately left alone: curl is named by
+  // absolute path in the request arguments (see lib/Balance.js), so no
+  // directory on any search path decides what runs.
   //
   // Quickshell's Process merges this object into the inherited environment
   // rather than replacing it — `clearEnvironment` defaults to false, and only
@@ -177,12 +176,13 @@ Item {
   // CLI, where Node's spawnSync replaces the child environment outright; see
   // bin/deepseek-offpeak.
   readonly property var balanceEnvironment: ({
-    HOME: Quickshell.env("HOME")
+    HOME: Quickshell.env("HOME"),
+    DEEPSEEK_API_KEY: root.apiKey
   })
 
-  // The request shell lives in lib/Balance.js, shared with the CLI so the
+  // The request arguments live in lib/Balance.js, shared with the CLI so the
   // key-handling path cannot drift between the two.
-  readonly property string balanceScript: Balance.BALANCE_REQUEST_SCRIPT
+  readonly property var balanceArguments: [Balance.CURL_BINARY].concat(Balance.CURL_ARGUMENTS)
 
   function refreshBalance() {
     if (root.balanceBusy) return false
@@ -242,10 +242,15 @@ Item {
   }
 
   // The absolute deadline for the whole request. curl's own --max-time bounds a
-  // transfer, but not a curl that never got to start one — a wedged parent, a
-  // hung DNS resolver — and nothing else closes the single-flight latch when a
-  // process outlives its own timeouts. Setting `running` false kills it, and
-  // the exit path below reports network_error.
+  // transfer, but not a curl that never got to start one — a hung DNS resolver
+  // — and nothing else closes the single-flight latch when a process outlives
+  // its own timeouts. Setting `running` false kills it, and the exit path below
+  // reports network_error.
+  //
+  // curl is the direct child, so this kills the request itself. Under a shell,
+  // the kill would land on the shell and a curl descendant could hold the
+  // stdout pipe open past it, leaving this collector waiting on a process
+  // nobody killed.
   Timer {
     id: balanceWatchdog
     interval: Balance.REQUEST_TIMEOUT_MS
@@ -258,14 +263,7 @@ Item {
     property int exitCode: -1
     property bool stdoutDone: false
     property string stdoutText: ""
-    command: [Balance.BASH_BINARY, "-c", root.balanceScript]
-    stdinEnabled: true
-
-    // The key is written here and nowhere else — not into the command, not
-    // into the environment. Bash reads the line, builds the curl config, and
-    // `printf |` gives curl its own stdout to read the config from, so the
-    // key never reaches a pipe owned by curl either.
-    onStarted: write(root.apiKey + "\n")
+    command: root.balanceArguments
 
     stdout: StdioCollector {
       waitForEnd: true

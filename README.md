@@ -62,10 +62,14 @@ Failures are reported one line at a time, never swallowed:
 | `http_<code>` | the request completed with a non-200 status |
 | `invalid_response` | a 200 that is not the documented JSON shape |
 
-The key is never passed as an argument, so the command line is safe to show in
-`ps`. The request names `bash` and `curl` by absolute path, caps the response at
-64 KiB, and is killed if it outlives 15 seconds — a balance readout should not
-be able to spend the shell's memory or its patience.
+The key is never passed as an argument. It travels in the request's environment
+and curl expands it into the header (`--variable %DEEPSEEK_API_KEY`,
+`--expand-header`), so `ps` shows the variable's name and no value. The request
+*is* curl — no shell, no pipeline, named by absolute path — capped at 16 KiB and
+at 16 currencies with short codes and short amounts, and killed outright if it
+outlives 15 seconds. A balance readout should not be able to spend the shell's
+memory or its patience, and a process tree is a thing to have only when it earns
+its keep.
 
 ## CLI
 

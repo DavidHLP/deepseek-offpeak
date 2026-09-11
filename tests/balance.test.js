@@ -157,38 +157,39 @@ check("the key alphabet rejects curl-config metacharacters, not just whitespace"
   assert.strictEqual(B.isUsableKey({}), false)
 })
 
-check("the shared request script keeps the key out of argv", () => {
-  const script = B.BALANCE_REQUEST_SCRIPT
-  assert.strictEqual(typeof script, "string")
-  assert.ok(script.length > 0)
+check("the request is one process, and the key is not in its argv", () => {
+  const argv = B.CURL_ARGUMENTS
+  assert.ok(Array.isArray(argv) && argv.length > 0)
 
-  // It must read the key from stdin...
-  assert.ok(script.includes("read -r key"), script)
-  // ...and must not name an environment variable or interpolate anything into
-  // the command line. Either would put the key in /proc/<pid>/cmdline.
-  assert.ok(!script.includes("$DEEPSEEK_API_KEY"), "no env lookup")
-  assert.ok(!script.includes("-H "), "the header must not be an argv argument")
-  // The header travels as a curl config on a pipe, and curl reads it from stdin.
-  assert.ok(script.includes("--config -"), "config comes from stdin")
-  assert.ok(script.includes("printf 'header = \"Authorization: Bearer %s\""), script)
-
-  // The two timeouts and the status-code trailer that fromResponse() splits on.
-  assert.ok(script.includes("--connect-timeout 5"), "5s connect timeout")
-  assert.ok(script.includes("--max-time 10"), "10s total timeout")
-  assert.ok(script.includes('-w "\\n%{http_code}"'), "status code appended")
-  assert.ok(script.includes("https://api.deepseek.com/user/balance"), "documented endpoint")
-
-  // curl is named by absolute path, so nothing earlier on PATH decides what
-  // runs, and the transfer is capped in bytes rather than only in seconds.
-  assert.ok(script.includes(B.CURL_BINARY), script)
+  // curl is named by absolute path (the caller prepends B.CURL_BINARY), so
+  // nothing earlier on PATH decides what runs.
   assert.ok(B.CURL_BINARY.startsWith("/"), "curl must be an absolute path")
-  assert.ok(!/(^|\s|\|)curl\s/.test(script), "curl is never resolved through PATH")
-  assert.ok(script.includes("--max-filesize " + B.MAX_RESPONSE_BYTES),
-    "the body is capped in bytes, not just in time")
 
-  // The same text must be what both runtimes execute: the string is exported,
-  // so this assertion is the single definition.
-  assert.strictEqual(B.BALANCE_REQUEST_SCRIPT, script)
+  // No shell, no pipeline: one process, which is what makes killing it mean
+  // the whole request is dead and no descendant can hold the stdout pipe.
+  for (const arg of argv) {
+    assert.ok(!/(^|\s)(bash|sh|head|printf|curl)(\s|$)/.test(arg),
+      `argv must name no other program: ${JSON.stringify(arg)}`)
+    assert.ok(!arg.includes("|"), `no pipeline: ${JSON.stringify(arg)}`)
+  }
+
+  // The key travels in the child's environment and is expanded by curl, so the
+  // value is in no command line — argv carries only the variable's name.
+  assert.ok(argv.includes("%" + B.KEY_ENVIRONMENT_VARIABLE), "curl reads the variable")
+  assert.ok(argv.includes("Authorization: Bearer {{" + B.KEY_ENVIRONMENT_VARIABLE + "}}"),
+    "the header is a template, not a value")
+  assert.ok(!argv.some((arg) => /sk-/.test(arg)), "no key literal in argv")
+  assert.ok(!argv.some((arg) => arg.includes("-H ")), "the header is not an argv literal")
+
+  // The two timeouts, the byte cap, and the status-code trailer that
+  // fromResponse() splits on.
+  assert.ok(argv.includes("--connect-timeout") && argv.includes("5"), "5s connect timeout")
+  assert.ok(argv.includes("--max-time") && argv.includes("10"), "10s total timeout")
+  assert.ok(argv.includes("--max-filesize") && argv.includes(String(B.MAX_RESPONSE_BYTES)),
+    "the body is capped in bytes, not just in time")
+  assert.deepStrictEqual(argv.slice(-3),
+    ["-w", "\n%{http_code}", "https://api.deepseek.com/user/balance"],
+    "status code appended, documented endpoint last")
 })
 
 check("a key longer than the ceiling is not a key", () => {

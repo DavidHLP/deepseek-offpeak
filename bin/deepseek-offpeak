@@ -48,25 +48,26 @@ function queryBalance(apiKey) {
   }
 
   // The environment is spread, not replaced. spawnSync() replaces the child's
-  // environment outright when `env` is given, so passing only HOME would drop
-  // HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE — and a machine that
-  // reaches the API through a proxy or a custom CA would fail here with
-  // network_error while the identical request succeeds from the user's shell.
-  // PATH is not pinned because nothing is resolved through it: the request
-  // script names bash and curl by absolute path.
+  // environment outright when `env` is given, so passing only HOME and the key
+  // would drop HTTPS_PROXY/NO_PROXY and CURL_CA_BUNDLE/SSL_CERT_FILE — and a
+  // machine that reaches the API through a proxy or a custom CA would fail here
+  // with network_error while the identical request succeeds from the user's
+  // shell. PATH is not pinned because nothing is resolved through it: curl is
+  // named by absolute path, and the key travels in this environment rather than
+  // in argv (curl reads it with `--variable %NAME`).
   //
   // timeout/maxBuffer mirror the widget's own bounds (Balance.REQUEST_TIMEOUT_MS
-  // and Balance.MAX_RESPONSE_BYTES): the shell is capped at the same 64 KiB, and
-  // a transfer that outlives the deadline is killed rather than waited on.
-  const child = spawnSync(Balance.BASH_BINARY, ["-c", Balance.BALANCE_REQUEST_SCRIPT], {
-    input: apiKey + "\n",
+  // and Balance.MAX_RESPONSE_BYTES), and curl is the direct child, so a transfer
+  // that outlives the deadline is killed rather than waited on.
+  const child = spawnSync(Balance.CURL_BINARY, Balance.CURL_ARGUMENTS, {
     encoding: "utf8",
     timeout: Balance.REQUEST_TIMEOUT_MS,
     maxBuffer: Balance.MAX_RESPONSE_BYTES,
     killSignal: "SIGKILL",
     env: {
       ...process.env,
-      HOME: os.homedir()
+      HOME: os.homedir(),
+      DEEPSEEK_API_KEY: apiKey
     }
   })
 

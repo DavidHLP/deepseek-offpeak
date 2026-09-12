@@ -47,7 +47,7 @@ jobs:
           env -u DEEPSEEK_API_KEY timeout 5s ./bin/deepseek-offpeak --help
 
   qml:
-    name: QML validation
+    name: QML validation (advisory, host-only)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -99,18 +99,18 @@ jobs:
             ${{ runner.temp }}/SHA256SUMS
           if-no-files-found: error
 
+  # QML depends on an Omarchy host and is advisory; keep the required gate reproducible.
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [node, qml, package]
+    needs: [node, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require all CI jobs to pass
+      - name: Require blocking CI jobs to pass
         shell: bash
         run: |
           if [[ "${{ needs.node.result }}" != success ||
-                "${{ needs.qml.result }}" != success ||
                 "${{ needs.package.result }}" != success ]]; then
             echo 'A required CI job failed or was cancelled.' >&2
             exit 1

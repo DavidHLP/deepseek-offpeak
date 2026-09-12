@@ -306,19 +306,19 @@ check("the document has limits on its shape, not just on its size", () => {
 })
 
 check("currency values cannot carry terminal controls", () => {
-  const wrap = (currency) => JSON.stringify({
+  const balanceResponse = (currency) => JSON.stringify({
     is_available: true,
     balance_infos: [{ currency: currency, total_balance: "1", granted_balance: "0", topped_up_balance: "1" }]
   }) + "\n200"
 
   for (const currency of ["\u001b[2J", "USD\n", "USD\r", "\u007fUSD", "\u009b2J"]) {
-    assert.deepStrictEqual(B.fromResponse(0, wrap(currency)),
+    assert.deepStrictEqual(B.fromResponse(0, balanceResponse(currency)),
       { ok: false, error: "invalid_response" },
       `${JSON.stringify(currency)} must be rejected before status formatting`)
   }
 
   for (const currency of ["CNY", "USD", "USDT"]) {
-    assert.strictEqual(B.fromResponse(0, wrap(currency)).ok, true,
+    assert.strictEqual(B.fromResponse(0, balanceResponse(currency)).ok, true,
       `${currency} remains a valid printable currency code`)
   }
 })

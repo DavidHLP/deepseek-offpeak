@@ -145,7 +145,9 @@ It requires Omarchy (`OMARCHY_PATH`) and Quickshell, and locates `qmllint` at
 `/usr/lib/qt6/bin/qmllint` when it is not on `PATH`. Without those host modules
 it reports that the check was skipped. This is not full runtime validation:
 imports, inherited host types, injected properties, and runtime behavior are
-outside this check. CI and tagged releases run the same best-effort command.
+outside this check. CI runs it as an advisory job; it is intentionally outside
+the required `ci-ok` gate. Tagged releases run the same best-effort command
+during validation.
 
 Tagged releases use `vMAJOR.MINOR.PATCH` (for example `v0.1.0`) and require the
 tag to match `manifest.json`'s semantic version. Push the tag to run the

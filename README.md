@@ -117,9 +117,40 @@ deepseek-offpeak refresh           re-query the balance and print the status
 ```
 
 The CLI runs as plain `node` with no shell present, and answers from the same
-modules the bar and panel render — so it cannot disagree with the widget.
+modules the bar and panel render — so it cannot disagree with the widget. The
+project uses Node.js **26.7.0** locally and in CI. Install that exact version
+before running the checks below.
 
-## Layout
+## Tests
+
+```sh
+node tests/schedule.test.js
+node tests/balance.test.js
+node tests/status.test.js
+```
+
+No dependencies — each file is a plain node script that exits non-zero on
+failure. `schedule.test.js` pins instants in UTC and asserts the state, the
+boundaries, and the countdown, with the four boundary times (04:00, 10:00,
+01:00, 06:00) and the weekend cases covered explicitly. `balance.test.js` and
+`status.test.js` cover the failure paths without a network.
+
+For an optional host-only QML import/parser smoke check, run:
+
+```sh
+scripts/ci/validate-qml.sh
+```
+
+It requires Omarchy (`OMARCHY_PATH`) and Quickshell, and locates `qmllint` at
+`/usr/lib/qt6/bin/qmllint` when it is not on `PATH`. Without those host modules
+it reports that the check was skipped. This is not full runtime validation:
+imports, inherited host types, injected properties, and runtime behavior are
+outside this check. CI and tagged releases run the same best-effort command.
+
+Tagged releases use `vMAJOR.MINOR.PATCH` (for example `v0.1.0`) and require the
+tag to match `manifest.json`'s semantic version. Push the tag to run the
+release workflow; it validates the tagged contents, creates a draft release,
+and publishes it only after validation succeeds.
 
 | Path | Role |
 | --- | --- |
@@ -135,20 +166,6 @@ modules the bar and panel render — so it cannot disagree with the widget.
 Nothing in the plugin holds schedule state of its own: the bar, the panel, and
 the CLI all read the service, and the service reads `lib/Schedule.js`. That is
 what keeps the countdown they show from drifting apart.
-
-## Tests
-
-```
-node tests/schedule.test.js
-node tests/balance.test.js
-node tests/status.test.js
-```
-
-No dependencies — each file is a plain node script that exits non-zero on
-failure. `schedule.test.js` pins instants in UTC and asserts the state, the
-boundaries, and the countdown, with the four boundary times (04:00, 10:00,
-01:00, 06:00) and the weekend cases covered explicitly. `balance.test.js` and
-`status.test.js` cover the failure paths without a network.
 
 ## License
 

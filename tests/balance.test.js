@@ -52,6 +52,27 @@ check("network failure is network_error", () => {
     "Could not reach api.deepseek.com")
 })
 
+check("process errors and QML output overflow map to invalid_response", () => {
+  for (const code of ["ENOBUFS", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"]) {
+    assert.deepStrictEqual(B.stateFromProcessError({ code: code }, 1000), {
+      status: "error", error: "invalid_response", isAvailable: false, balances: [], updatedAtMs: 1000
+    })
+  }
+  for (const code of ["ETIMEDOUT", "EACCES", undefined]) {
+    assert.deepStrictEqual(B.stateFromProcessError({ code: code }, 1000), {
+      status: "error", error: "network_error", isAvailable: false, balances: [], updatedAtMs: 1000
+    })
+  }
+
+  // QML stops the process after retaining only the bounded prefix; the state
+  // mapping must report that as an invalid response and keep the prior time.
+  assert.deepStrictEqual(B.stateFromResponse(null, "", 2000, 1000, true), {
+    status: "error", error: "invalid_response", isAvailable: false, balances: [], updatedAtMs: 1000
+  })
+  // The old fromResponse shape and output remain unchanged for CLI/tests.
+  assert.deepStrictEqual(B.fromResponse(7, ""), { ok: false, error: "network_error" })
+})
+
 check("non-200 is http_<status>", () => {
   assert.deepStrictEqual(B.fromResponse(0, "Unauthorized\n401"), { ok: false, error: "http_401" })
   assert.deepStrictEqual(B.fromResponse(0, "go away\n503"), { ok: false, error: "http_503" })

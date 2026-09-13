@@ -64,7 +64,8 @@ function queryBalance(key) {
     killSignal: "SIGKILL",
     env: Balance.requestEnvironment(process.env, os.homedir(), key.key)
   })
-  const exitCode = child.error ? null : child.status
+  if (child.error) return Balance.stateFromProcessError(child.error, 0)
+  const exitCode = child.status
   const completionMs = exitCode === null || exitCode === undefined ? 0 : Date.now()
   return Balance.stateFromResponse(exitCode, child.stdout || "", completionMs, 0)
 }

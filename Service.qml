@@ -301,25 +301,27 @@ Item {
     root.balanceBusy = true
     root.balanceState = Balance.loadingState(root.balanceState)
     balanceProc.exitCode = -1
-    balanceProc.stdoutDone = false
+    balanceProc.outputTooLarge = false
     balanceProc.stdoutText = ""
+    balanceProc.stdout.streamEnded = false
     balanceProc.environment = root.balanceEnvironment
     balanceProc.running = true
     balanceWatchdog.restart()
     return true
   }
 
-  // Called from both the stdout stream and the exit signal, because their order
-  // is not guaranteed; whichever arrives second does the work.
+  // The parser marks its stream complete from Process.onFinished; onExited then
+  // has the complete bounded text and the canonical state is finalized once.
   function finishBalance() {
     if (!root.balanceBusy) return
     if (balanceProc.exitCode === -1) return
-    if (!balanceProc.stdoutDone) return
+    if (!balanceProc.stdout.streamEnded) return
 
     balanceWatchdog.stop()
     root.balanceBusy = false
     root.balanceState = Balance.stateFromResponse(balanceProc.exitCode,
-      balanceProc.stdoutText, Date.now(), root.balanceUpdatedAt)
+      balanceProc.stdoutText, Date.now(), root.balanceUpdatedAt,
+      balanceProc.outputTooLarge)
   }
 
   // The absolute deadline for the whole request. curl's own --max-time bounds a
@@ -342,18 +344,28 @@ Item {
   Process {
     id: balanceProc
     property int exitCode: -1
-    property bool stdoutDone: false
+    property bool outputTooLarge: false
     property string stdoutText: ""
     command: root.balanceArguments
 
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        balanceProc.stdoutText = String(text || "")
-        balanceProc.stdoutDone = true
-        root.finishBalance()
+    stdout: SplitParser {
+      property bool streamEnded: false
+      splitMarker: ""
+      onRead: function(data) {
+        if (balanceProc.outputTooLarge) return
+        var chunk = String(data || "")
+        var remaining = Balance.MAX_RESPONSE_BYTES - balanceProc.stdoutText.length
+        if (chunk.length > remaining) {
+          balanceProc.stdoutText += chunk.slice(0, remaining)
+          balanceProc.outputTooLarge = true
+          balanceProc.running = false
+          return
+        }
+        balanceProc.stdoutText += chunk
       }
     }
+
+    onFinished: function() { balanceProc.stdout.streamEnded = true }
 
     // stderr is deliberately not collected. Nothing reads it, and a collector
     // with waitForEnd buffers without bound — curl's -sS diagnostics are small,
@@ -372,6 +384,7 @@ Item {
     onRunningChanged: {
       if (running) return
       if (!root.balanceBusy) return
+      if (balanceProc.outputTooLarge) return
       Qt.callLater(root.recoverStuckBalance)
     }
   }

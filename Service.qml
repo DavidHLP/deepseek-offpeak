@@ -126,11 +126,12 @@ Item {
   // -------------------------------------------------- balance (optional)
 
   // status: "idle" | "loading" | "ok" | "error"
-  property string balanceStatus: "idle"
-  property string balanceError: ""
-  property var balanceBalances: []
-  property bool balanceIsAvailable: false
-  property double balanceUpdatedAt: 0
+  property var balanceState: Balance.idleState()
+  readonly property string balanceStatus: root.balanceState.status
+  readonly property string balanceError: root.balanceState.error
+  readonly property var balanceBalances: root.balanceState.balances
+  readonly property bool balanceIsAvailable: root.balanceState.isAvailable
+  readonly property double balanceUpdatedAt: root.balanceState.updatedAtMs
   // Single-flight latch: one request at a time, by construction. The key-file
   // read is part of the same single flight, so it gets its own latch rather
   // than sharing one — a read that finishes must not look like a request that
@@ -151,10 +152,12 @@ Item {
   // being held until the shell restarts.
   property string apiKey: ""
   property string apiKeySource: ""
+  property string keyReadEnvironmentValue: ""
   readonly property bool hasApiKey: Balance.isUsableKey(root.apiKey)
 
-  readonly property string keyFilePath: Balance.keyFilePath(
+  readonly property var keyReadSpec: Balance.keyReadSpec(
     Quickshell.env("XDG_CONFIG_HOME"), Quickshell.env("HOME"))
+  readonly property string keyFilePath: root.keyReadSpec.path
 
   // The key file is read with `head -c`, not with Quickshell's FileView, and the
   // reason is the same one that bounds the balance request: FileView reads a
@@ -165,14 +168,13 @@ Item {
   //
   // `--` ends the options, so a path that begins with a dash is a path.
   // Nothing is sourced or executed: what comes back is parsed by
-  // Balance.keyFileResult, which takes one sk-… line and rejects the rest.
+  // Balance.resolveKey, which takes one sk-… line and rejects the rest.
   Process {
     id: keyRead
     property int exitCode: -1
     property bool stdoutDone: false
     property string stdoutText: ""
-    command: [Balance.HEAD_BINARY, "-c", String(Balance.KEY_FILE_READ_BYTES), "--",
-      root.keyFilePath]
+    command: root.keyReadSpec.command
 
     stdout: StdioCollector {
       waitForEnd: true
@@ -199,7 +201,7 @@ Item {
   // the file's place — is not a key, and must not leave the latch closed.
   Timer {
     id: keyReadWatchdog
-    interval: Balance.KEY_FILE_READ_TIMEOUT_MS
+    interval: root.keyReadSpec.timeoutMs
     repeat: false
     onTriggered: keyRead.running = false
   }
@@ -212,9 +214,9 @@ Item {
     root.reportKeyProblem(Balance.ERROR_MISSING_API_KEY)
   }
 
-  readonly property string balanceMessage: Balance.describe(root.balanceResult)
+  readonly property string balanceMessage: Balance.describeState(root.balanceState)
 
-  // The result object Balance.describe() expects, mirroring the last parse.
+  // Keep the parsed-result shape available for existing QML consumers.
   readonly property var balanceResult: root.balanceStatus === "ok"
     ? { ok: true, isAvailable: root.balanceIsAvailable, balances: root.balanceBalances }
     : (root.balanceStatus === "error"
@@ -238,25 +240,20 @@ Item {
   // CURL_CA_BUNDLE/SSL_CERT_FILE still reach curl. That is *not* true of the
   // CLI, where Node's spawnSync replaces the child environment outright; see
   // bin/deepseek-offpeak.
-  readonly property var balanceEnvironment: ({
-    HOME: Quickshell.env("HOME"),
-    DEEPSEEK_API_KEY: root.apiKey
-  })
+  readonly property var balanceEnvironment: Balance.requestEnvironment(
+    null, Quickshell.env("HOME"), root.apiKey)
 
   // The request arguments live in lib/Balance.js, shared with the CLI so the
   // key-handling path cannot drift between the two.
-  readonly property var balanceArguments: [Balance.CURL_BINARY].concat(Balance.CURL_ARGUMENTS)
+  readonly property var balanceRequestSpec: Balance.requestSpec()
+  readonly property var balanceArguments: root.balanceRequestSpec.command
 
   // No usable key is not a request: report it and leave the schedule and every
   // later retry untouched.
   function reportKeyProblem(error) {
     root.apiKey = ""
     root.apiKeySource = ""
-    root.balanceStatus = "error"
-    root.balanceError = error
-    root.balanceIsAvailable = false
-    root.balanceBalances = []
-    root.balanceUpdatedAt = 0
+    root.balanceState = Balance.errorState(error, 0)
     return false
   }
 
@@ -270,11 +267,12 @@ Item {
 
     // head exits nonzero when there was no file to read, which is the
     // difference between "no key file" and "a key file that is not a key".
-    var resolved = Balance.keyFileResult(keyRead.stdoutText, keyRead.exitCode === 0)
-    if (resolved.key === "") return root.reportKeyProblem(resolved.error)
+    var resolved = Balance.resolveKey(root.keyReadEnvironmentValue,
+      keyRead.stdoutText, keyRead.exitCode === 0)
+    if (resolved.status !== "resolved") return root.reportKeyProblem(resolved.error)
 
     root.apiKey = resolved.key
-    root.apiKeySource = "file"
+    root.apiKeySource = resolved.source
     root.startBalanceRequest()
   }
 
@@ -282,10 +280,11 @@ Item {
     if (root.balanceBusy || root.keyReadBusy) return false
 
     // The environment first, and for free: no process, no read.
-    var fromEnvironment = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
-    if (Balance.isUsableKey(fromEnvironment)) {
-      root.apiKey = fromEnvironment
-      root.apiKeySource = "environment"
+    root.keyReadEnvironmentValue = String(Quickshell.env("DEEPSEEK_API_KEY") || "")
+    var resolved = Balance.resolveKey(root.keyReadEnvironmentValue)
+    if (resolved.status === "resolved") {
+      root.apiKey = resolved.key
+      root.apiKeySource = resolved.source
       return root.startBalanceRequest()
     }
 
@@ -300,41 +299,30 @@ Item {
 
   function startBalanceRequest() {
     root.balanceBusy = true
-    root.balanceStatus = "loading"
-    root.balanceError = ""
+    root.balanceState = Balance.loadingState(root.balanceState)
     balanceProc.exitCode = -1
-    balanceProc.stdoutDone = false
+    balanceProc.outputTooLarge = false
+    balanceProc.stdoutBytes = 0
     balanceProc.stdoutText = ""
+    balanceProc.stdout.streamEnded = false
     balanceProc.environment = root.balanceEnvironment
     balanceProc.running = true
     balanceWatchdog.restart()
     return true
   }
 
-  // Called from both the stdout stream and the exit signal, because their order
-  // is not guaranteed; whichever arrives second does the work.
+  // Quickshell invokes the parser's streamEnded before emitting exited, so the
+  // onExited handler below sees the complete bounded text and finalizes once.
   function finishBalance() {
     if (!root.balanceBusy) return
     if (balanceProc.exitCode === -1) return
-    if (!balanceProc.stdoutDone) return
+    if (!balanceProc.stdout.streamEnded) return
 
     balanceWatchdog.stop()
     root.balanceBusy = false
-    var result = Balance.fromResponse(balanceProc.exitCode, balanceProc.stdoutText)
-
-    if (result.ok) {
-      root.balanceStatus = "ok"
-      root.balanceError = ""
-      root.balanceIsAvailable = result.isAvailable
-      root.balanceBalances = result.balances
-      root.balanceUpdatedAt = Date.now()
-      return
-    }
-
-    root.balanceStatus = "error"
-    root.balanceError = result.error
-    root.balanceIsAvailable = false
-    root.balanceBalances = []
+    root.balanceState = Balance.stateFromResponse(balanceProc.exitCode,
+      balanceProc.stdoutText, Date.now(), root.balanceUpdatedAt,
+      balanceProc.outputTooLarge)
   }
 
   // The absolute deadline for the whole request. curl's own --max-time bounds a
@@ -349,7 +337,7 @@ Item {
   // nobody killed.
   Timer {
     id: balanceWatchdog
-    interval: Balance.REQUEST_TIMEOUT_MS
+    interval: root.balanceRequestSpec.timeoutMs
     repeat: false
     onTriggered: balanceProc.running = false
   }
@@ -357,28 +345,39 @@ Item {
   Process {
     id: balanceProc
     property int exitCode: -1
-    property bool stdoutDone: false
+    property bool outputTooLarge: false
+    property int stdoutBytes: 0
     property string stdoutText: ""
     command: root.balanceArguments
 
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        balanceProc.stdoutText = String(text || "")
-        balanceProc.stdoutDone = true
-        root.finishBalance()
+    stdout: SplitParser {
+      property bool streamEnded: false
+      splitMarker: ""
+      onRead: function(data) {
+        if (balanceProc.outputTooLarge) return
+        var chunk = String(data || "")
+        var chunkBytes = Balance.utf8ByteLength(chunk)
+        if (chunkBytes > Balance.MAX_RESPONSE_BYTES - balanceProc.stdoutBytes) {
+          balanceProc.outputTooLarge = true
+          balanceProc.signal(9)
+          balanceProc.running = false
+          return
+        }
+        balanceProc.stdoutText += chunk
+        balanceProc.stdoutBytes += chunkBytes
       }
+    }
+
+    onExited: function(code) {
+      balanceProc.stdout.streamEnded = true
+      balanceProc.exitCode = code
+      root.finishBalance()
     }
 
     // stderr is deliberately not collected. Nothing reads it, and a collector
     // with waitForEnd buffers without bound — curl's -sS diagnostics are small,
     // but the buffer would hold whatever the interpreter or a broken pipe sent
     // it. Uncollected stderr goes to the shell's own stderr instead.
-
-    onExited: function(code) {
-      balanceProc.exitCode = code
-      root.finishBalance()
-    }
 
     // A process that never started (bash missing, resource exhaustion) or was
     // killed never reports an exit code, so `exited` alone would leave the
@@ -387,6 +386,7 @@ Item {
     onRunningChanged: {
       if (running) return
       if (!root.balanceBusy) return
+      if (balanceProc.outputTooLarge) return
       Qt.callLater(root.recoverStuckBalance)
     }
   }
@@ -396,10 +396,7 @@ Item {
     if (balanceProc.exitCode !== -1) return
     balanceWatchdog.stop()
     root.balanceBusy = false
-    root.balanceStatus = "error"
-    root.balanceError = Balance.ERROR_NETWORK
-    root.balanceIsAvailable = false
-    root.balanceBalances = []
+    root.balanceState = Balance.errorState(Balance.ERROR_NETWORK, root.balanceUpdatedAt)
   }
 
   // First read a beat after startup so the balance is on screen without the
@@ -442,13 +439,7 @@ Item {
     { nowMs: root.nowMs, notificationsEnabled: root.notificationsEnabled,
       apiKeySource: root.apiKeySource })
 
-  readonly property var statusBalance: ({
-    status: root.balanceStatus,
-    error: root.balanceError,
-    isAvailable: root.balanceIsAvailable,
-    updatedAtMs: root.balanceUpdatedAt,
-    balances: root.balanceBalances
-  })
+  readonly property var statusBalance: root.balanceState
 
   function statusText() {
     return Status.text(root.statusState, root.statusBalance)
@@ -458,4 +449,3 @@ Item {
     return Status.object(root.statusState, root.statusBalance)
   }
 }
-

@@ -52,6 +52,27 @@ check("network failure is network_error", () => {
     "Could not reach api.deepseek.com")
 })
 
+check("process errors and QML output overflow map to invalid_response", () => {
+  for (const code of ["ENOBUFS", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"]) {
+    assert.deepStrictEqual(B.stateFromProcessError({ code: code }, 1000), {
+      status: "error", error: "invalid_response", isAvailable: false, balances: [], updatedAtMs: 1000
+    })
+  }
+  for (const code of ["ETIMEDOUT", "EACCES", undefined]) {
+    assert.deepStrictEqual(B.stateFromProcessError({ code: code }, 1000), {
+      status: "error", error: "network_error", isAvailable: false, balances: [], updatedAtMs: 1000
+    })
+  }
+
+  // QML stops the process after retaining only the bounded prefix; the state
+  // mapping must report that as an invalid response and keep the prior time.
+  assert.deepStrictEqual(B.stateFromResponse(null, "", 2000, 1000, true), {
+    status: "error", error: "invalid_response", isAvailable: false, balances: [], updatedAtMs: 1000
+  })
+  // The old fromResponse shape and output remain unchanged for CLI/tests.
+  assert.deepStrictEqual(B.fromResponse(7, ""), { ok: false, error: "network_error" })
+})
+
 check("non-200 is http_<status>", () => {
   assert.deepStrictEqual(B.fromResponse(0, "Unauthorized\n401"), { ok: false, error: "http_401" })
   assert.deepStrictEqual(B.fromResponse(0, "go away\n503"), { ok: false, error: "http_503" })
@@ -106,6 +127,22 @@ check("the status line is split off the body, however the body ends", () => {
   assert.deepStrictEqual(B.splitResponse("{\n\"a\": 1\n}\n200"), { body: "{\n\"a\": 1\n}", status: "200" })
   // No newline at all: no status to read, so the response is not a 200.
   assert.deepStrictEqual(B.fromResponse(0, "just a body"), { ok: false, error: "http_unknown" })
+})
+
+check("the response bound counts UTF-8 bytes", () => {
+  assert.strictEqual(B.utf8ByteLength("abc"), 3)
+  assert.strictEqual(B.utf8ByteLength("中"), 3)
+  assert.strictEqual(B.utf8ByteLength("😀"), 4)
+  assert.strictEqual(B.utf8ByteLength("a中😀"), 8)
+
+  const unicodeBody = JSON.stringify({
+    is_available: true, balance_infos: [], note: "中".repeat(6000)
+  })
+  assert.ok(unicodeBody.length < B.MAX_RESPONSE_BYTES, "decoded text is under the limit")
+  assert.ok(B.utf8ByteLength(unicodeBody + "\n200") > B.MAX_RESPONSE_BYTES,
+    "encoded output is over the byte limit")
+  assert.deepStrictEqual(B.fromResponse(0, unicodeBody + "\n200"),
+    { ok: false, error: "invalid_response" })
 })
 
 check("amounts must be finite, non-empty, and non-negative", () => {
@@ -250,6 +287,60 @@ check("a bounded read of the key file decides like this, and only like this", ()
 
   // No file at all is missing_api_key, not invalid: there is nothing to fix.
   assert.deepStrictEqual(R("", false), { key: "", error: "missing_api_key" })
+})
+
+check("the shared acquisition policy has one key and process contract", () => {
+  const key = "sk-" + "abc123def456".repeat(3)
+
+  assert.deepStrictEqual(B.resolveKey(key),
+    { status: "resolved", key: key, source: "environment", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key"),
+    { status: "pending", key: "", source: "", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", key + "\n", true),
+    { status: "resolved", key: key, source: "file", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", "junk\n", true),
+    { status: "error", key: "", source: "", error: "invalid_api_key_file" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", "", false),
+    { status: "error", key: "", source: "", error: "missing_api_key" })
+
+  const request = B.requestSpec()
+  assert.deepStrictEqual(request.command, [B.CURL_BINARY].concat(B.CURL_ARGUMENTS))
+  assert.strictEqual(request.timeoutMs, B.REQUEST_TIMEOUT_MS)
+  assert.strictEqual(request.maxBuffer, B.MAX_RESPONSE_BYTES)
+
+  const keyRead = B.keyReadSpec("/home/d/.config", "/home/d")
+  assert.deepStrictEqual(keyRead.command,
+    [B.HEAD_BINARY, "-c", String(B.KEY_FILE_READ_BYTES), "--",
+      "/home/d/.config/deepseek-offpeak/key"])
+  assert.strictEqual(keyRead.timeoutMs, B.KEY_FILE_READ_TIMEOUT_MS)
+  assert.strictEqual(keyRead.maxBuffer, B.KEY_FILE_READ_BYTES)
+
+  const inherited = { HTTPS_PROXY: "http://proxy", DEEPSEEK_API_KEY: "old" }
+  const environment = B.requestEnvironment(inherited, "/home/d", key)
+  assert.deepStrictEqual(environment, {
+    HTTPS_PROXY: "http://proxy", DEEPSEEK_API_KEY: key, HOME: "/home/d"
+  })
+  assert.notStrictEqual(environment, inherited)
+})
+
+check("the shared balance state preserves the existing lifecycle meaning", () => {
+  const success = B.successState(B.fromResponse(0, good + "\n200"), 1000)
+  assert.deepStrictEqual(success, {
+    status: "ok", error: "", isAvailable: true, balances: success.balances, updatedAtMs: 1000
+  })
+  const loading = B.loadingState(success)
+  assert.strictEqual(loading.status, "loading")
+  assert.strictEqual(loading.updatedAtMs, 1000)
+  assert.strictEqual(loading.balances, success.balances)
+  assert.deepStrictEqual(B.stateFromResponse(0, good + "\n200", 2000, 1000),
+    { status: "ok", error: "", isAvailable: true, balances: success.balances, updatedAtMs: 2000 })
+  assert.deepStrictEqual(B.stateFromResponse(0, "bad\n500", 2000, 1000),
+    { status: "error", error: "http_500", isAvailable: false, balances: [], updatedAtMs: 1000 })
+  assert.deepStrictEqual(B.errorState("missing_api_key"),
+    { status: "error", error: "missing_api_key", isAvailable: false, balances: [], updatedAtMs: 0 })
+  assert.strictEqual(B.describeState(B.idleState()), "No balance data yet")
+  assert.strictEqual(B.describeState(loading), "No balance data yet")
+  assert.strictEqual(B.describeState(success), "")
 })
 
 check("the key file path follows the XDG variables", () => {

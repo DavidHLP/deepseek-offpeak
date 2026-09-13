@@ -126,12 +126,12 @@ Item {
   // -------------------------------------------------- balance (optional)
 
   // status: "idle" | "loading" | "ok" | "error"
-  property string balanceStatus: "idle"
-  property string balanceError: ""
-  property var balanceBalances: []
-  property bool balanceIsAvailable: false
-  property double balanceUpdatedAt: 0
   property var balanceState: Balance.idleState()
+  readonly property string balanceStatus: root.balanceState.status
+  readonly property string balanceError: root.balanceState.error
+  readonly property var balanceBalances: root.balanceState.balances
+  readonly property bool balanceIsAvailable: root.balanceState.isAvailable
+  readonly property double balanceUpdatedAt: root.balanceState.updatedAtMs
   // Single-flight latch: one request at a time, by construction. The key-file
   // read is part of the same single flight, so it gets its own latch rather
   // than sharing one — a read that finishes must not look like a request that
@@ -168,7 +168,7 @@ Item {
   //
   // `--` ends the options, so a path that begins with a dash is a path.
   // Nothing is sourced or executed: what comes back is parsed by
-  // Balance.keyFileResult, which takes one sk-… line and rejects the rest.
+  // Balance.resolveKey, which takes one sk-… line and rejects the rest.
   Process {
     id: keyRead
     property int exitCode: -1
@@ -216,15 +216,6 @@ Item {
 
   readonly property string balanceMessage: Balance.describeState(root.balanceState)
 
-  function applyBalanceState(state) {
-    root.balanceState = state
-    root.balanceStatus = state.status
-    root.balanceError = state.error
-    root.balanceIsAvailable = state.isAvailable
-    root.balanceBalances = state.balances
-    root.balanceUpdatedAt = state.updatedAtMs
-  }
-
   // Keep the parsed-result shape available for existing QML consumers.
   readonly property var balanceResult: root.balanceStatus === "ok"
     ? { ok: true, isAvailable: root.balanceIsAvailable, balances: root.balanceBalances }
@@ -262,7 +253,7 @@ Item {
   function reportKeyProblem(error) {
     root.apiKey = ""
     root.apiKeySource = ""
-    root.applyBalanceState(Balance.errorState(error, 0))
+    root.balanceState = Balance.errorState(error, 0)
     return false
   }
 
@@ -278,10 +269,10 @@ Item {
     // difference between "no key file" and "a key file that is not a key".
     var resolved = Balance.resolveKey(root.keyReadEnvironmentValue,
       keyRead.stdoutText, keyRead.exitCode === 0)
-    if (resolved.key === "") return root.reportKeyProblem(resolved.error)
+    if (resolved.status !== "resolved") return root.reportKeyProblem(resolved.error)
 
     root.apiKey = resolved.key
-    root.apiKeySource = "file"
+    root.apiKeySource = resolved.source
     root.startBalanceRequest()
   }
 
@@ -308,7 +299,7 @@ Item {
 
   function startBalanceRequest() {
     root.balanceBusy = true
-    root.applyBalanceState(Balance.loadingState(root.balanceState))
+    root.balanceState = Balance.loadingState(root.balanceState)
     balanceProc.exitCode = -1
     balanceProc.stdoutDone = false
     balanceProc.stdoutText = ""
@@ -327,8 +318,8 @@ Item {
 
     balanceWatchdog.stop()
     root.balanceBusy = false
-    root.applyBalanceState(Balance.stateFromResponse(balanceProc.exitCode,
-      balanceProc.stdoutText, Date.now(), root.balanceUpdatedAt))
+    root.balanceState = Balance.stateFromResponse(balanceProc.exitCode,
+      balanceProc.stdoutText, Date.now(), root.balanceUpdatedAt)
   }
 
   // The absolute deadline for the whole request. curl's own --max-time bounds a
@@ -390,7 +381,7 @@ Item {
     if (balanceProc.exitCode !== -1) return
     balanceWatchdog.stop()
     root.balanceBusy = false
-    root.applyBalanceState(Balance.errorState(Balance.ERROR_NETWORK, root.balanceUpdatedAt))
+    root.balanceState = Balance.errorState(Balance.ERROR_NETWORK, root.balanceUpdatedAt)
   }
 
   // First read a beat after startup so the balance is on screen without the
@@ -433,13 +424,7 @@ Item {
     { nowMs: root.nowMs, notificationsEnabled: root.notificationsEnabled,
       apiKeySource: root.apiKeySource })
 
-  readonly property var statusBalance: ({
-    status: root.balanceStatus,
-    error: root.balanceError,
-    isAvailable: root.balanceIsAvailable,
-    updatedAtMs: root.balanceUpdatedAt,
-    balances: root.balanceBalances
-  })
+  readonly property var statusBalance: root.balanceState
 
   function statusText() {
     return Status.text(root.statusState, root.statusBalance)

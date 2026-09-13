@@ -310,8 +310,8 @@ Item {
     return true
   }
 
-  // The parser marks its stream complete from Process.onFinished; onExited then
-  // has the complete bounded text and the canonical state is finalized once.
+  // Quickshell invokes the parser's streamEnded before emitting exited, so the
+  // onExited handler below sees the complete bounded text and finalizes once.
   function finishBalance() {
     if (!root.balanceBusy) return
     if (balanceProc.exitCode === -1) return
@@ -365,17 +365,16 @@ Item {
       }
     }
 
-    onFinished: function() { balanceProc.stdout.streamEnded = true }
+    onExited: function(code) {
+      balanceProc.stdout.streamEnded = true
+      balanceProc.exitCode = code
+      root.finishBalance()
+    }
 
     // stderr is deliberately not collected. Nothing reads it, and a collector
     // with waitForEnd buffers without bound — curl's -sS diagnostics are small,
     // but the buffer would hold whatever the interpreter or a broken pipe sent
     // it. Uncollected stderr goes to the shell's own stderr instead.
-
-    onExited: function(code) {
-      balanceProc.exitCode = code
-      root.finishBalance()
-    }
 
     // A process that never started (bash missing, resource exhaustion) or was
     // killed never reports an exit code, so `exited` alone would leave the

@@ -129,6 +129,22 @@ check("the status line is split off the body, however the body ends", () => {
   assert.deepStrictEqual(B.fromResponse(0, "just a body"), { ok: false, error: "http_unknown" })
 })
 
+check("the response bound counts UTF-8 bytes", () => {
+  assert.strictEqual(B.utf8ByteLength("abc"), 3)
+  assert.strictEqual(B.utf8ByteLength("中"), 3)
+  assert.strictEqual(B.utf8ByteLength("😀"), 4)
+  assert.strictEqual(B.utf8ByteLength("a中😀"), 8)
+
+  const unicodeBody = JSON.stringify({
+    is_available: true, balance_infos: [], note: "中".repeat(6000)
+  })
+  assert.ok(unicodeBody.length < B.MAX_RESPONSE_BYTES, "decoded text is under the limit")
+  assert.ok(B.utf8ByteLength(unicodeBody + "\n200") > B.MAX_RESPONSE_BYTES,
+    "encoded output is over the byte limit")
+  assert.deepStrictEqual(B.fromResponse(0, unicodeBody + "\n200"),
+    { ok: false, error: "invalid_response" })
+})
+
 check("amounts must be finite, non-empty, and non-negative", () => {
   const wrap = (total) => JSON.stringify({
     is_available: true,

@@ -302,6 +302,7 @@ Item {
     root.balanceState = Balance.loadingState(root.balanceState)
     balanceProc.exitCode = -1
     balanceProc.outputTooLarge = false
+    balanceProc.stdoutBytes = 0
     balanceProc.stdoutText = ""
     balanceProc.stdout.streamEnded = false
     balanceProc.environment = root.balanceEnvironment
@@ -345,6 +346,7 @@ Item {
     id: balanceProc
     property int exitCode: -1
     property bool outputTooLarge: false
+    property int stdoutBytes: 0
     property string stdoutText: ""
     command: root.balanceArguments
 
@@ -354,14 +356,15 @@ Item {
       onRead: function(data) {
         if (balanceProc.outputTooLarge) return
         var chunk = String(data || "")
-        var remaining = Balance.MAX_RESPONSE_BYTES - balanceProc.stdoutText.length
-        if (chunk.length > remaining) {
-          balanceProc.stdoutText += chunk.slice(0, remaining)
+        var chunkBytes = Balance.utf8ByteLength(chunk)
+        if (chunkBytes > Balance.MAX_RESPONSE_BYTES - balanceProc.stdoutBytes) {
           balanceProc.outputTooLarge = true
+          balanceProc.signal(9)
           balanceProc.running = false
           return
         }
         balanceProc.stdoutText += chunk
+        balanceProc.stdoutBytes += chunkBytes
       }
     }
 

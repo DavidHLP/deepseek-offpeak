@@ -252,6 +252,60 @@ check("a bounded read of the key file decides like this, and only like this", ()
   assert.deepStrictEqual(R("", false), { key: "", error: "missing_api_key" })
 })
 
+check("the shared acquisition policy has one key and process contract", () => {
+  const key = "sk-" + "abc123def456".repeat(3)
+
+  assert.deepStrictEqual(B.resolveKey(key),
+    { status: "resolved", key: key, source: "environment", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key"),
+    { status: "pending", key: "", source: "", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", key + "\n", true),
+    { status: "resolved", key: key, source: "file", error: "" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", "junk\n", true),
+    { status: "error", key: "", source: "", error: "invalid_api_key_file" })
+  assert.deepStrictEqual(B.resolveKey("not-a-key", "", false),
+    { status: "error", key: "", source: "", error: "missing_api_key" })
+
+  const request = B.requestSpec()
+  assert.deepStrictEqual(request.command, [B.CURL_BINARY].concat(B.CURL_ARGUMENTS))
+  assert.strictEqual(request.timeoutMs, B.REQUEST_TIMEOUT_MS)
+  assert.strictEqual(request.maxBuffer, B.MAX_RESPONSE_BYTES)
+
+  const keyRead = B.keyReadSpec("/home/d/.config", "/home/d")
+  assert.deepStrictEqual(keyRead.command,
+    [B.HEAD_BINARY, "-c", String(B.KEY_FILE_READ_BYTES), "--",
+      "/home/d/.config/deepseek-offpeak/key"])
+  assert.strictEqual(keyRead.timeoutMs, B.KEY_FILE_READ_TIMEOUT_MS)
+  assert.strictEqual(keyRead.maxBuffer, B.KEY_FILE_READ_BYTES)
+
+  const inherited = { HTTPS_PROXY: "http://proxy", DEEPSEEK_API_KEY: "old" }
+  const environment = B.requestEnvironment(inherited, "/home/d", key)
+  assert.deepStrictEqual(environment, {
+    HTTPS_PROXY: "http://proxy", DEEPSEEK_API_KEY: key, HOME: "/home/d"
+  })
+  assert.notStrictEqual(environment, inherited)
+})
+
+check("the shared balance state preserves the existing lifecycle meaning", () => {
+  const success = B.successState(B.fromResponse(0, good + "\n200"), 1000)
+  assert.deepStrictEqual(success, {
+    status: "ok", error: "", isAvailable: true, balances: success.balances, updatedAtMs: 1000
+  })
+  const loading = B.loadingState(success)
+  assert.strictEqual(loading.status, "loading")
+  assert.strictEqual(loading.updatedAtMs, 1000)
+  assert.strictEqual(loading.balances, success.balances)
+  assert.deepStrictEqual(B.stateFromResponse(0, good + "\n200", 2000, 1000),
+    { status: "ok", error: "", isAvailable: true, balances: success.balances, updatedAtMs: 2000 })
+  assert.deepStrictEqual(B.stateFromResponse(0, "bad\n500", 2000, 1000),
+    { status: "error", error: "http_500", isAvailable: false, balances: [], updatedAtMs: 1000 })
+  assert.deepStrictEqual(B.errorState("missing_api_key"),
+    { status: "error", error: "missing_api_key", isAvailable: false, balances: [], updatedAtMs: 0 })
+  assert.strictEqual(B.describeState(B.idleState()), "No balance data yet")
+  assert.strictEqual(B.describeState(loading), "No balance data yet")
+  assert.strictEqual(B.describeState(success), "")
+})
+
 check("the key file path follows the XDG variables", () => {
   assert.strictEqual(B.keyFilePath("/home/d/.config", "/home/d"),
     "/home/d/.config/deepseek-offpeak/key")

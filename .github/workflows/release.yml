@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 26.7.0
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate tagged runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            manifest_version="$(node -p "require('./manifest.json').version")"
+            test "$manifest_version" = "${GITHUB_REF_NAME#v}" || {
+              echo "Tag $GITHUB_REF_NAME does not match manifest version $manifest_version" >&2
+              exit 1
+            }
+          else
+            echo 'workflow_dispatch validation run; release publishing is disabled'
+          fi
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -type f -name '*.js' -not -path './.git/*' -not -path './.serena/*' -print0 |
+            xargs -0 -r -n1 node --check
+
+      - name: Validate manifest
+        run: node scripts/ci/validate-manifest.js
+
+      - name: Run self-checks
+        run: |
+          node tests/schedule.test.js
+          node tests/balance.test.js
+          node tests/status.test.js
+
+      - name: Run QML import/parser smoke check
+        run: scripts/ci/validate-qml.sh
+
+      - name: Check CLI help is offline-safe
+        run: env -u DEEPSEEK_API_KEY timeout 5s ./bin/deepseek-offpeak --help >/dev/null
+
+      - name: Build, checksum, extract, and verify runtime
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/deepseek-offpeak.tar"
+          checksums="$RUNNER_TEMP/SHA256SUMS"
+          extracted="$RUNNER_TEMP/deepseek-offpeak-extracted"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf "$archive" \
+            assets BarWidget.qml Panel.qml Service.qml \
+            bin lib manifest.json README.md LICENSE \
+            scripts/ci/validate-manifest.js
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum "$(basename "$archive")" > "$checksums"
+            sha256sum -c "$(basename "$checksums")"
+          )
+          mkdir "$extracted"
+          tar -xf "$archive" -C "$extracted"
+          find "$extracted" -type f -name '*.js' -print0 |
+            xargs -0 -r -n1 node --check
+          node "$extracted/scripts/ci/validate-manifest.js"
+          test -x "$extracted/bin/deepseek-offpeak"
+          env -u DEEPSEEK_API_KEY timeout 5s "$extracted/bin/deepseek-offpeak" --help >/dev/null
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "checksums=$checksums" >> "$GITHUB_OUTPUT"
+
+      - name: Upload validated release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-files
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksums }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Download validated release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-files
+
+      - name: Create draft release and upload files
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: ${{ runner.temp }}/release-files/*
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

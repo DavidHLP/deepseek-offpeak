@@ -53,7 +53,7 @@ function resolveApiKey() {
   return Balance.resolveKey(fromEnvironment, child.stdout || "", child.status === 0)
 }
 
-function queryBalance(key, nowMs) {
+function queryBalance(key) {
   if (key.status !== "resolved") return Balance.errorState(key.error || Balance.ERROR_MISSING_API_KEY)
 
   const request = Balance.requestSpec()
@@ -64,7 +64,9 @@ function queryBalance(key, nowMs) {
     killSignal: "SIGKILL",
     env: Balance.requestEnvironment(process.env, os.homedir(), key.key)
   })
-  return Balance.stateFromResponse(child.error ? null : child.status, child.stdout || "", nowMs, 0)
+  const exitCode = child.error ? null : child.status
+  const completionMs = exitCode === null || exitCode === undefined ? 0 : Date.now()
+  return Balance.stateFromResponse(exitCode, child.stdout || "", completionMs, 0)
 }
 
 function main(argv) {
@@ -85,7 +87,7 @@ function main(argv) {
   const key = resolveApiKey()
   const state = Schedule.statusState(Schedule.stateAt(nowMs),
     { nowMs: nowMs, notificationsEnabled: null, apiKeySource: key.source })
-  const balance = queryBalance(key, nowMs)
+  const balance = queryBalance(key)
 
   if (argv.includes("--json")) {
     process.stdout.write(JSON.stringify(Status.object(state, balance), null, 2) + "\n")

@@ -1,0 +1,37 @@
+lib/Holidays.js
+  s_382d394313b464::t_ac83413b7fd5d4 137-139,141-143,146-151
+  s_382d394313b464::t_a036868310b174 154-163,178,183-193
+  s_382d394313b464::t_8744b0c5129c51 339,341
+  s_382d394313b464::t_91fd613a9b04fa 324
+  s_382d394313b464::t_780b050d33f6dc 38
+  s_382d394313b464::t_825e5cf8f14e37 152-153
+  s_382d394313b464::t_b50bc5db9177ff 194-196
+Service.qml
+  s_382d394313b464::t_113ac1ebaa2e0c 200-202
+  s_382d394313b464::t_d8b7ab03daaa3c 100-103,114,120-121,125-130,132-139,163,165,180,183-192
+  s_382d394313b464::t_95c87ed829f55d 240
+bin/deepseek-offpeak
+  s_382d394313b464::t_27f296b7b42112 97,103-113,118-120
+tests/holidays.test.js
+  s_382d394313b464::t_15a3a5c7efee40 169-172,179,182,189-192,203-211
+  s_382d394313b464::t_335de975920d6e 173-178
+  s_382d394313b464::t_7b3eb1774bfd51 212-213
+README.md
+  s_382d394313b464::t_406eab86e78b5c 58-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eef6d6c52abad9de53bee53a786686ff987bcb67",
+  "prompts": {},
+  "sessions": {
+    "s_382d394313b464": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18142b08-3ae9-4d44-bf6e-86e1e1feab5a",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "DavidHLP <144919470+DavidHLP@users.noreply.github.com>"
+    }
+  }
+}

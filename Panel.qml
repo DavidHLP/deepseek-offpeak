@@ -573,7 +573,15 @@ Panel {
                 textFormat: Text.PlainText
                 width: parent.width
                 visible: (root.service ? root.service.todayPeakLabels : []).length === 0
-                text: "None \u2014 off-peak all day"
+                // A Chinese public holiday is why a weekday can have no peak
+                // windows at all, so name it when there is one: "None" on a
+                // Tuesday invites exactly the question the name answers.
+                text: {
+                  var holiday = root.service ? root.service.holidayName : ""
+                  return holiday === ""
+                    ? "None \u2014 off-peak all day"
+                    : "None \u2014 " + holiday + ", off-peak all day"
+                }
                 color: root.contentForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall

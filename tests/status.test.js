@@ -10,6 +10,7 @@
 const assert = require("assert")
 const Status = require("../lib/Status.js")
 const Schedule = require("../lib/Schedule.js")
+const Holidays = require("../lib/Holidays.js")
 
 let checks = 0
 function check(name, fn) {
@@ -131,6 +132,39 @@ check("notificationsEnabled is omitted where there is no switch, not fabricated"
   const shell = Status.text(stateAt(at(2026, 9, 9, 2, 30), false), good)
   assert.ok(shell.includes("Notifications: off"), shell)
   assert.strictEqual(Status.object(stateAt(at(2026, 9, 9, 2, 30), true), good).notificationsEnabled, true)
+})
+
+check("a holiday is named once, under the state it explains", () => {
+  const holidays = Holidays.fallback()
+  const holidayState = (ms) => Schedule.statusState(Schedule.stateAt(ms, holidays),
+    { nowMs: ms, notificationsEnabled: null, holidays: holidays })
+
+  // Monday 2026-10-05 is inside 国庆节: off-peak, and the line says why.
+  const inHoliday = holidayState(at(2026, 10, 5, 2, 0))
+  assert.strictEqual(inHoliday.peak, false)
+  assert.strictEqual(inHoliday.holidayName, "国庆节")
+  const rendered = Status.text(inHoliday, null)
+  assert.ok(rendered.includes("Holiday:       国庆节 — off-peak all day"), rendered)
+  assert.strictEqual(Status.object(inHoliday, null).holidayName, "国庆节")
+
+  // Thursday 2026-10-08 is the day after: peak again, and no line at all.
+  const ordinary = holidayState(at(2026, 10, 8, 2, 0))
+  assert.strictEqual(ordinary.peak, true)
+  assert.strictEqual(ordinary.holidayName, "")
+  assert.ok(!Status.text(ordinary, null).includes("Holiday:"))
+  assert.strictEqual(Status.object(ordinary, null).holidayName, "")
+
+  // The same instants without a table keep the weekday rule, and the schedule
+  // sentence names the years it was given.
+  assert.ok(!Status.text(Schedule.statusState(Schedule.stateAt(at(2026, 10, 5, 2, 0))), null)
+    .includes("Holiday:"), "no table, no holiday")
+  assert.strictEqual(Status.object({}, null).holidayName, "", "and a missing field degrades")
+  const thursday = Schedule.stateAt(at(2026, 10, 8, 2, 0), holidays)
+  const withYears = Schedule.statusState(thursday,
+    { nowMs: at(2026, 10, 8, 2, 0), holidayYears: "2026" })
+  assert.ok(withYears.schedule.includes("Chinese public holidays all day (2026)."), withYears.schedule)
+  assert.ok(ordinary.schedule.includes("Chinese public holidays all day."),
+    "and with no years given it still states the rule")
 })
 
 check("the local offset label is a real offset, and reflects the zone", () => {

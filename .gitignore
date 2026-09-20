@@ -13,10 +13,12 @@
 !/bin/deepseek-offpeak
 !/lib/
 !/lib/Balance.js
+!/lib/Holidays.js
 !/lib/Schedule.js
 !/lib/Status.js
 !/tests/
 !/tests/balance.test.js
+!/tests/holidays.test.js
 !/tests/schedule.test.js
 !/tests/status.test.js
 !/.github/

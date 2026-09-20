@@ -5,16 +5,21 @@
 // Answers from the local timetable, so it works with the shell closed and with
 // api.deepseek.com unreachable. The schedule comes from lib/Schedule.js — the
 // same module the bar and panel render — and the text and JSON come from
-// lib/Status.js, so this cannot disagree with the widget.
+// lib/Status.js, so this cannot disagree with the widget. Its other input is the
+// holiday table (lib/Holidays.js), read from the shared cache and refreshed from
+// the same source the shell uses when that cache is cold or a week old; the
+// table baked into that module answers when nothing can be fetched at all.
 //
-// The balance is the only part that touches the network, it is queried only
-// when asked (status does read it, since that is the point of the command),
-// and its failure is one line that leaves everything above it intact.
+// The balance is the only part that touches DeepSeek, it is queried only when
+// asked (status does read it, since that is the point of the command), and its
+// failure is one line that leaves everything above it intact.
 
+const fs = require("fs")
 const path = require("path")
 const os = require("os")
 const { spawnSync } = require("child_process")
 const Schedule = require(path.join(__dirname, "..", "lib", "Schedule.js"))
+const Holidays = require(path.join(__dirname, "..", "lib", "Holidays.js"))
 const Balance = require(path.join(__dirname, "..", "lib", "Balance.js"))
 const Status = require(path.join(__dirname, "..", "lib", "Status.js"))
 
@@ -29,7 +34,9 @@ const USAGE = `Usage: deepseek-offpeak status [--json]
 
 The pricing state is computed locally from DeepSeek's published UTC timetable
 and never from the API: status answers even when api.deepseek.com is
-unreachable, and a balance failure gets its own line.
+unreachable, and a balance failure gets its own line. The Chinese public
+holiday dates the timetable needs are read from a cache the shell and this
+command share, and fetched only when that cache is absent or a week old.
 `
 
 // Where the key came from, and the key itself: the process environment, then
@@ -51,6 +58,70 @@ function resolveApiKey() {
     killSignal: "SIGKILL"
   })
   return Balance.resolveKey(fromEnvironment, child.stdout || "", child.status === 0)
+}
+
+// The holiday table, read before fetched: the cached documents for this Beijing
+// year and the next, merged over the table baked into lib/Holidays.js. The cache
+// is the one Service.qml keeps, so the widget and this command schedule from the
+// same dates, and a status call on a warm cache runs no process beyond the
+// balance.
+//
+// A cache that is missing, unreadable, oversized, stale, or not the documented
+// shape is what triggers a fetch: the same curl spec the shell runs, in the same
+// bounded way, so the two cannot disagree about which year they hold or what
+// counts as a valid document. A failed fetch is not an error to report — it
+// leaves the previous table in place, which is exactly what a status readout
+// needs from it.
+function readHolidayCache(cacheHome, year) {
+  const spec = Holidays.readSpec(cacheHome, year)
+  let stats
+  try {
+    stats = fs.statSync(spec.path)
+  } catch (e) {
+    return null
+  }
+  if (!stats.isFile() || stats.size > Holidays.MAX_CACHE_BYTES) return null
+
+  let text
+  try {
+    text = fs.readFileSync(spec.path, "utf8")
+  } catch (e) {
+    return null
+  }
+  if (!Holidays.parse(text).ok) return null
+  return { text: text, stale: Date.now() - stats.mtimeMs >= Holidays.STALE_AFTER_MS }
+}
+
+function fetchHolidays(cacheHome, year) {
+  const spec = Holidays.fetchSpec(cacheHome, year)
+  spawnSync(spec.command[0], spec.command.slice(1), {
+    encoding: "utf8",
+    timeout: spec.timeoutMs,
+    maxBuffer: Holidays.MAX_CACHE_BYTES,
+    killSignal: "SIGKILL"
+  })
+}
+
+function resolveHolidays(nowMs) {
+  const cacheHome = Holidays.cacheHome(process.env.XDG_CACHE_HOME, os.homedir())
+  const thisYear = Schedule.beijingYear(nowMs)
+  const fetchNextYear = Schedule.beijingYear(nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > thisYear
+
+  const texts = []
+  for (const year of [thisYear, thisYear + 1]) {
+    // The next year is worth a fetch only once its arrangement has been
+    // published; before that the request is a guaranteed 404, once per status
+    // call. Its cache is still read whenever it is there.
+    const mayFetch = year === thisYear || fetchNextYear
+    let cached = readHolidayCache(cacheHome, year)
+    if (mayFetch && (!cached || cached.stale)) {
+      fetchHolidays(cacheHome, year)
+      const reread = readHolidayCache(cacheHome, year)
+      if (reread) cached = reread
+    }
+    texts.push(cached ? cached.text : "")
+  }
+  return Holidays.tableFromTexts(texts)
 }
 
 function queryBalance(key) {
@@ -86,8 +157,10 @@ function main(argv) {
   // peak state with off-peak clocks and a negative-looking countdown.
   const nowMs = Date.now()
   const key = resolveApiKey()
-  const state = Schedule.statusState(Schedule.stateAt(nowMs),
-    { nowMs: nowMs, notificationsEnabled: null, apiKeySource: key.source })
+  const holidays = resolveHolidays(nowMs)
+  const state = Schedule.statusState(Schedule.stateAt(nowMs, holidays),
+    { nowMs: nowMs, notificationsEnabled: null, apiKeySource: key.source,
+      holidays: holidays, holidayYears: Holidays.yearsOf(holidays).join(", ") })
   const balance = queryBalance(key)
 
   if (argv.includes("--json")) {

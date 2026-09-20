@@ -2,12 +2,20 @@
 //
 // Every case pins an instant in UTC and asserts the state, the boundaries, and
 // the countdown at that instant. The four boundary times are the ones that can
-// be got wrong (04:00 and 10:00 must be off-peak, 01:00 and 06:00 peak), and
-// the weekend cases are the ones where a naive per-day implementation produces
-// a switch at midnight that never happens.
+// be got wrong (04:00 and 10:00 must be off-peak, 01:00 and 06:00 peak), the
+// weekend cases are the ones where a naive per-day implementation produces a
+// switch at midnight that never happens, and the holiday cases are the ones
+// where a run of off-peak days outlasts any fixed horizon.
 
 const assert = require("assert")
 const S = require("../lib/Schedule.js")
+const H = require("../lib/Holidays.js")
+
+// The published 2026 arrangement, which is what the plugin schedules from when
+// it cannot fetch anything: 元旦 01-01..01-03, 春节 02-15..02-23, 清明节
+// 04-04..04-06, 劳动节 05-01..05-05, 端午节 06-19..06-21, 中秋节 09-25..09-27,
+// 国庆节 10-01..10-07. Its own correctness is checked in holidays.test.js.
+const holidays = H.fallback()
 
 const at = (y, m, d, h, min) => Date.UTC(y, m - 1, d, h || 0, min || 0)
 const iso = (ms) => new Date(ms).toISOString()
@@ -281,6 +289,126 @@ check("compact durations stay inside a bar slot", () => {
   // Never longer than four characters, which is what the vertical slot holds.
   for (const seconds of [0, 9, 59, 60, 599, 3599, 3600, 35999, 86399, 999999]) {
     assert.ok(S.formatCompact(seconds).length <= 4, `${seconds} -> ${S.formatCompact(seconds)}`)
+  }
+})
+
+// ---------------------------------------------------------------- holidays
+//
+// A Chinese public holiday is billed off-peak all day, so a weekday that is one
+// has no peak windows. The four checks below are the rule, the two long runs it
+// produces, and the make-up workdays that change nothing.
+
+check("a public holiday has no peak windows, and the same weekday without one does", () => {
+  // Monday 2026-10-05, inside 国庆节.
+  for (let hour = 0; hour < 24; hour++) {
+    assert.strictEqual(S.isPeakAt(at(2026, 10, 5, hour, 0), holidays), false,
+      `2026-10-05 ${hour}:00 UTC is in a holiday`)
+  }
+  // Monday 2026-10-12, an ordinary Monday: both windows fire.
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 12, 1, 0), holidays), true, "01:00")
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 12, 6, 0), holidays), true, "06:00")
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 12, 10, 0), holidays), false, "10:00")
+
+  // The table is what did it: with no table the holiday schedules as a weekday.
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 5, 1, 0)), true, "no table, no holidays")
+})
+
+check("a holiday week is one off-peak run, to the minute it ends", () => {
+  // 国庆节 10-01..10-07 is Thursday to Wednesday, so the run starts after
+  // Wednesday 09-30's last window and ends at Thursday 10-08's first.
+  const before = S.stateAt(at(2026, 9, 30, 10, 0), holidays)
+  assert.strictEqual(before.peak, false)
+  assert.strictEqual(iso(before.nextSwitchMs), iso(at(2026, 10, 8, 1, 0)),
+    "off-peak from Wednesday 10:00 until the following Thursday 01:00")
+
+  const inside = S.stateAt(at(2026, 10, 5, 3, 0), holidays)
+  assert.strictEqual(inside.peak, false)
+  assert.strictEqual(iso(inside.currentStartMs), iso(at(2026, 9, 30, 10, 0)),
+    "the stretch began the day the holiday did")
+  assert.strictEqual(inside.secondsToSwitch, (at(2026, 10, 8, 1, 0) - at(2026, 10, 5, 3, 0)) / 1000)
+
+  // And Thursday 08-10 is peak again, one second into its first window.
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 8, 1, 0), holidays), true)
+  assert.strictEqual(S.isPeakAt(at(2026, 10, 8, 0, 59), holidays), false)
+
+  const day = S.timeline(at(2026, 10, 5, 12, 0), holidays)
+  assert.deepStrictEqual(day.peaks, [], "a holiday has no peak windows to list")
+  assert.strictEqual(day.layout.length, 1, "one continuous off-peak bar")
+  assert.strictEqual(day.layout[0].peak, false)
+})
+
+check("the Spring Festival run is longer than any fixed horizon could reach", () => {
+  // 春节 02-15..02-23 is nine days starting on a Sunday, so the surrounding
+  // weekend and the days either side make one run from Friday 02-13 10:00 to
+  // Tuesday 02-24 01:00 — 255 hours. A horizon of a few days would truncate it,
+  // reporting a switch that never happens and a stretch that began at midnight.
+  const start = S.stateAt(at(2026, 2, 13, 10, 0), holidays)
+  assert.strictEqual(start.peak, false)
+  assert.strictEqual(iso(start.nextSwitchMs), iso(at(2026, 2, 24, 1, 0)))
+
+  const inside = S.stateAt(at(2026, 2, 20, 3, 0), holidays)
+  assert.ok(inside.nextSwitchMs - inside.currentStartMs > 10 * 24 * 3600 * 1000,
+    "the run is more than ten days long")
+  assert.strictEqual(iso(inside.currentStartMs), iso(at(2026, 2, 13, 10, 0)))
+  assert.strictEqual(iso(inside.nextSwitchMs), iso(at(2026, 2, 24, 1, 0)))
+  assert.strictEqual(inside.peak, false)
+
+  // Tuesday 02-24 is an ordinary Tuesday, and its first window is peak.
+  assert.strictEqual(S.isPeakAt(at(2026, 2, 24, 1, 0), holidays), true)
+})
+
+check("the 调休 make-up workdays change nothing: they are weekends either way", () => {
+  // 元旦 01-04 (Sunday), 春节 02-14 and 02-28 (Saturdays), 劳动节 05-09, 国庆节
+  // 09-20 and 10-10 — the days the notice makes people work. DeepSeek bills them
+  // off-peak, which is what a Saturday or a Sunday is here.
+  for (const [month, day] of [[1, 4], [2, 14], [2, 28], [5, 9], [9, 20], [10, 10]]) {
+    const ms = at(2026, month, day, 2, 0)
+    const weekday = new Date(ms).getUTCDay()
+    assert.ok(weekday === 0 || weekday === 6, `2026-${month}-${day} is not a weekend`)
+    assert.strictEqual(S.isPeakAt(ms, holidays), false, `2026-${month}-${day} must be off-peak`)
+  }
+})
+
+check("a table changes only the dates it names", () => {
+  // Wednesday 2026-09-09, named by a table of one date, against the day after.
+  const table = { "2026-09-09": "test" }
+  assert.strictEqual(S.isPeakAt(at(2026, 9, 9, 1, 0), table), false)
+  assert.strictEqual(S.isPeakAt(at(2026, 9, 9, 6, 0), table), false)
+  assert.strictEqual(S.isPeakAt(at(2026, 9, 10, 1, 0), table), true, "Thursday is untouched")
+  assert.strictEqual(S.holidayName(at(2026, 9, 9, 1, 0), table), "test")
+  assert.strictEqual(S.holidayName(at(2026, 9, 10, 1, 0), table), "", "no holiday, no name")
+})
+
+check("the holiday a name belongs to is the Beijing date's", () => {
+  // 16:00 UTC is midnight in Beijing, which is where the date changes. 国庆节
+  // ends on 10-07, so the last instant that is still in it is 15:59 UTC.
+  assert.strictEqual(S.holidayName(at(2026, 10, 7, 15, 59), holidays), "国庆节")
+  assert.strictEqual(S.holidayName(at(2026, 10, 7, 16, 0), holidays), "", "already 10-08 in Beijing")
+  assert.strictEqual(S.holidayName(at(2026, 10, 6, 15, 0), holidays), "国庆节", "Beijing 23:00 on the 6th")
+
+  // The same boundary at the year end: 2026-12-31 16:00 UTC is 2027 in Beijing,
+  // which is the year whose arrangement a January fetch has to ask for.
+  assert.strictEqual(S.beijingDateKey(at(2026, 12, 31, 15, 59)), "2026-12-31")
+  assert.strictEqual(S.beijingDateKey(at(2026, 12, 31, 16, 0)), "2027-01-01")
+  assert.strictEqual(S.beijingYear(at(2026, 12, 31, 16, 0)), 2027)
+  assert.strictEqual(S.beijingDateKey(at(2026, 12, 31, 16, 0)), S.dateKeyUtc(at(2027, 1, 1, 0, 0)),
+    "the Beijing date is the UTC date eight hours later")
+})
+
+check("a whole holiday window never goes backwards or negative", () => {
+  // Five-minute steps from the last ordinary day of September through the whole
+  // 国庆节 stretch. The countdown crosses two merged runs and a holiday in the
+  // middle of the week, which is where a walked horizon can go wrong.
+  let previous
+  for (let ms = at(2026, 9, 29, 0, 0); ms < at(2026, 10, 10, 0, 0); ms += 5 * 60 * 1000) {
+    const state = S.stateAt(ms, holidays)
+    assert.ok(state.secondsToSwitch >= 0, `negative at ${iso(ms)}`)
+    assert.ok(state.nextSwitchMs >= ms, `a switch in the past at ${iso(ms)}`)
+    if (previous) {
+      assert.ok(state.nextSwitchMs >= previous.nextSwitchMs, `switch time moved back at ${iso(ms)}`)
+      assert.ok(state.currentStartMs >= previous.currentStartMs, `run start moved back at ${iso(ms)}`)
+    }
+    previous = state
   }
 })
 

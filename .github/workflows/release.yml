@@ -61,6 +61,7 @@ jobs:
       - name: Run self-checks
         run: |
           node tests/schedule.test.js
+          node tests/holidays.test.js
           node tests/balance.test.js
           node tests/status.test.js
 

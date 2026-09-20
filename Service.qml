@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "lib/Schedule.js" as Schedule
+import "lib/Holidays.js" as Holidays
 import "lib/Balance.js" as Balance
 import "lib/Status.js" as Status
 
@@ -15,6 +16,10 @@ import "lib/Status.js" as Status
 //
 // One instance serves the bar widget, the panel, and the CLI, so the countdown
 // the bar shows and the countdown the panel shows cannot disagree.
+//
+// Holiday dates are the one thing the schedule takes from outside itself: they
+// are fetched, cached, and read back — the plugin's second and last network
+// call. See lib/Holidays.js and the section below.
 Item {
   id: root
 
@@ -27,7 +32,7 @@ Item {
   // so the countdown moves without anything else owning a timer. (Named
   // `billing` rather than `state`: Item already has a `state` property.)
   property double nowMs: Date.now()
-  readonly property var billing: Schedule.stateAt(nowMs)
+  readonly property var billing: Schedule.stateAt(nowMs, root.holidays)
 
   readonly property bool peak: billing.peak
   readonly property string phaseLabel: billing.peak ? "Peak" : "Off-peak"
@@ -52,13 +57,217 @@ Item {
   // The local day, derived once in lib/Schedule.js where its fractions and zone
   // conversions are covered by tests rather than only by pixels. The panel reads
   // these straight through.
-  readonly property var day: Schedule.timeline(nowMs)
+  readonly property var day: Schedule.timeline(nowMs, root.holidays)
   readonly property var daySegmentLayout: day.layout
   readonly property var todayPeakLabels: day.peaks
   readonly property real nowFrac: day.nowFrac
   readonly property string timelineDayLabel: day.dayLabel
 
-  readonly property string scheduleSummary: Schedule.scheduleSummary()
+  readonly property string scheduleSummary: Schedule.scheduleSummary(root.holidayYearsLabel)
+
+  // -------------------------------------------------- holidays (China)
+  //
+  // A Chinese public holiday is billed as off-peak for the whole day, so the
+  // window math needs the year's dates. They come from a cached copy of the
+  // State Council's annual arrangement (lib/Holidays.js holds the URLs, the
+  // cache paths, the commands, and the parse). The cache is read first and
+  // fetched second, so a machine that is offline, or that has never fetched,
+  // still schedules from the baked table. A fetch that fails therefore costs
+  // nothing but freshness: the table it leaves behind still names the holidays
+  // that fall on a weekday, and every other day is decided by the rule.
+  property var holidays: Holidays.fallback()
+
+  readonly property string holidayCacheHome: Holidays.cacheHome(
+    Quickshell.env("XDG_CACHE_HOME"), Quickshell.env("HOME"))
+  // The Beijing year, because a holiday is a date in Beijing: on 31 December at
+  // 20:00 UTC the arrangement that matters is already the next year's.
+  readonly property int holidayYear: Schedule.beijingYear(root.nowMs)
+  readonly property string holidayName: Schedule.holidayName(root.nowMs, root.holidays)
+  readonly property string holidayYearsLabel: Holidays.yearsOf(root.holidays).join(", ")
+
+  // What has been read from the cache so far, by year. Kept as text rather than
+  // as a merged table because each read replaces one year and the table is
+  // rebuilt from all of them: a year that fails to read must not drop another.
+  property var holidayCacheTexts: ({})
+
+  // True once the first read-and-fetch cycle has finished. Until then the table
+  // is the baked one, which may not know this year's holidays at all — so the
+  // notification decision waits for it (see tick).
+  property bool holidayCycleDone: false
+
+  // The read-and-refresh queue, one step at a time. Two years are read before
+  // either is fetched — the current one and the next, so a January that runs
+  // into a new arrangement is already covered — and every fetch is followed by a
+  // read of the file it wrote, which is how fetched data reaches the schedule.
+  property var holidaySteps: []
+  property var holidayStep: null
+  property bool holidayStepActive: false
+  // Identifies the step in flight, so a callback scheduled for one step can tell
+  // that the next one has already started and leave it alone.
+  property int holidayStepSeq: 0
+
+  function holidayStepQueue() {
+    var year = root.holidayYear
+    var steps = [{ kind: "read", year: year }, { kind: "read", year: year + 1 },
+      { kind: "fetch", year: year }, { kind: "read", year: year }]
+    // The next year's document is published in early November. Asking for it
+    // earlier is a guaranteed 404, so it is asked for only once the year is
+    // close enough for it to exist — the same window the CLI uses, from the
+    // shared constant.
+    if (Schedule.beijingYear(root.nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > year)
+      steps.push({ kind: "fetch", year: year + 1 }, { kind: "read", year: year + 1 })
+    return steps
+  }
+
+  function refreshHolidays() {
+    if (root.holidayStepActive) return false
+    root.holidaySteps = root.holidayStepQueue()
+    return root.startHolidayStep()
+  }
+
+  function startHolidayStep() {
+    if (root.holidaySteps.length === 0) {
+      root.holidayStep = null
+      root.holidayStepActive = false
+      root.holidayCycleDone = true
+      return false
+    }
+
+    var step = root.holidaySteps[0]
+    root.holidaySteps = root.holidaySteps.slice(1)
+    root.holidayStep = step
+    root.holidayStepActive = true
+    root.holidayStepSeq++
+
+    holidayProc.exitCode = -1
+    holidayProc.stdoutDone = false
+    holidayProc.stdoutText = ""
+    holidayProc.stepSeq = root.holidayStepSeq
+    // The command lives in lib/Holidays.js, shared with the CLI, so the two
+    // cannot fetch different years or bound the read differently.
+    holidayProc.command = step.kind === "fetch"
+      ? Holidays.fetchSpec(root.holidayCacheHome, step.year).command
+      : Holidays.readSpec(root.holidayCacheHome, step.year).command
+    holidayProc.running = true
+    holidayWatchdog.restart()
+    return true
+  }
+
+  // A step is done when it has reported an exit code, and — for a read — when
+  // its stdout is complete: Quickshell emits the collector's streamFinished
+  // before `exited`, so waiting for both is what keeps the next step from
+  // starting on half-collected text.
+  function finishHolidayStep() {
+    if (!root.holidayStepActive) return false
+    if (holidayProc.exitCode === -1) return false
+    if (root.holidayStep.kind === "read" && !holidayProc.stdoutDone) return false
+
+    holidayWatchdog.stop()
+    root.holidayStepActive = false
+    if (root.holidayStep.kind === "read")
+      root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, root.holidayStep.year)
+    root.startHolidayStep()
+    return true
+  }
+
+  // A read that produced a document is adopted; a read that failed, and a fetch,
+  // leave every year exactly as it was. That asymmetry is the offline story: the
+  // table is only ever replaced by a newer document that parsed, never emptied
+  // by a fetch that did not — and never half-replaced by a curl that wrote the
+  // cache while this read it.
+  function adoptHolidayCache(exitCode, text, year) {
+    if (exitCode !== 0 || String(text) === "") return false
+    if (!Holidays.parse(String(text)).ok) return false
+
+    var texts = {}
+    for (var key in root.holidayCacheTexts) {
+      if (Object.prototype.hasOwnProperty.call(root.holidayCacheTexts, key))
+        texts[key] = root.holidayCacheTexts[key]
+    }
+    texts[String(year)] = String(text)
+    root.holidayCacheTexts = texts
+    root.holidays = Holidays.tableFromTexts(
+      [texts[String(root.holidayYear)], texts[String(root.holidayYear + 1)]])
+    return true
+  }
+
+  // A step that never reported an exit code — a process that could not start, or
+  // one the watchdog killed — would otherwise leave the queue stopped with the
+  // latch closed. `seq` is the step this was scheduled for: if the queue has
+  // moved on, there is nothing stuck.
+  function recoverStuckHolidayStep(seq) {
+    if (seq !== root.holidayStepSeq) return false
+    if (!root.holidayStepActive) return false
+    holidayWatchdog.stop()
+    root.holidayStepActive = false
+    return root.startHolidayStep()
+  }
+
+  Process {
+    id: holidayProc
+    property int exitCode: -1
+    property int stepSeq: 0
+    property bool stdoutDone: false
+    property string stdoutText: ""
+    command: []
+
+    // Bounded by construction on both steps: `head -c` stops one byte past the
+    // size limit, and curl writes the fetch to the cache file rather than to
+    // stdout. So the collector holds at most that much — the same reasoning the
+    // key-file read uses instead of an unbounded whole-file read.
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        holidayProc.stdoutText = String(text || "")
+        holidayProc.stdoutDone = true
+        root.finishHolidayStep()
+      }
+    }
+
+    onExited: function(code) {
+      holidayProc.exitCode = code
+      root.finishHolidayStep()
+    }
+
+    // Running going false with no exit code means the process died without
+    // reporting one. Deferred, because `exited` may still be on its way.
+    onRunningChanged: {
+      if (running) return
+      if (holidayProc.exitCode !== -1) return
+      var seq = holidayProc.stepSeq
+      Qt.callLater(function() { root.recoverStuckHolidayStep(seq) })
+    }
+  }
+
+  // The deadline for one step, from process start to kill. curl's own --max-time
+  // bounds a transfer but not a curl that never got to start one, and a read of
+  // a named pipe with no writer never ends at all.
+  Timer {
+    id: holidayWatchdog
+    interval: Holidays.STEP_TIMEOUT_MS
+    repeat: false
+    onTriggered: holidayProc.running = false
+  }
+
+  // First pass a beat after startup — reads answer from the cache immediately,
+  // so waiting is only about not competing with the shell's own startup — then
+  // once a week, which is far more often than an annual arrangement changes and
+  // is what notices a new year without a restart.
+  Timer {
+    id: holidayFirstTimer
+    interval: 3000
+    repeat: false
+    running: true
+    onTriggered: root.refreshHolidays()
+  }
+
+  Timer {
+    id: holidayRefreshTimer
+    interval: Holidays.STALE_AFTER_MS
+    repeat: true
+    running: true
+    onTriggered: root.refreshHolidays()
+  }
 
   // -------------------------------------------------- notifications
 
@@ -105,6 +314,13 @@ Item {
   function tick() {
     var wasPeak = root.peak
     root.nowMs = Date.now()
+    // The holiday table arrives a few seconds in, and a table that corrects
+    // today's state would otherwise look exactly like a transition — peak under
+    // the baked table, off-peak under the fetched one. So the first tick is not
+    // the first tick allowed to notify; the first one after the table settles
+    // is. Deferring also means the notice describes the state that is actually
+    // in force rather than the one the baked table guessed.
+    if (!root.primed && !root.holidayCycleDone) return
     var decision = Schedule.notificationForTick(root.primed, wasPeak, root.peak, root.notificationsEnabled)
     root.primed = true
     if (decision !== "") root.notifyOffPeak(decision)
@@ -419,11 +635,13 @@ Item {
     onTriggered: root.refreshBalance()
   }
 
-  // Recompute the countdown now and re-read the balance (single-flight, so a
-  // burst of middle-clicks collapses into the one request already running).
+  // Recompute the countdown now, re-read the balance, and run the holiday queue
+  // again (all single-flight, so a burst of middle-clicks collapses into the
+  // work already in progress).
   function refresh() {
     root.nowMs = Date.now()
     root.refreshBalance()
+    root.refreshHolidays()
   }
 
   // -------------------------------------------------- CLI status
@@ -437,7 +655,8 @@ Item {
   // CLI makes — so the two cannot list different fields.
   readonly property var statusState: Schedule.statusState(root.billing,
     { nowMs: root.nowMs, notificationsEnabled: root.notificationsEnabled,
-      apiKeySource: root.apiKeySource })
+      apiKeySource: root.apiKeySource, holidays: root.holidays,
+      holidayYears: root.holidayYearsLabel })
 
   readonly property var statusBalance: root.balanceState
 

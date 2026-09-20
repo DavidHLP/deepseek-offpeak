@@ -4,21 +4,64 @@ An [Omarchy](https://omarchy.org) plugin that shows DeepSeek's peak/off-peak
 billing state, counts down to the next change, optionally reads your account
 balance, and notifies you when off-peak starts.
 
-The schedule is computed **locally** from DeepSeek's published UTC timetable.
-It never infers billing state from server load or API availability, so the
-countdown is correct even when `api.deepseek.com` is unreachable.
+The schedule is computed **locally** from DeepSeek's published UTC timetable and
+the Chinese public holidays it excludes. It never infers billing state from
+server load or API availability, so the countdown is correct even when
+`api.deepseek.com` is unreachable — and the holiday dates come from a cache the
+shell and the CLI share, with last year's arrangement still scheduling the plugin
+when nothing can be fetched.
 
 ## The schedule
 
-Peak hours are weekdays **01:00–04:00** and **06:00–10:00 UTC**. Every other
-instant is off-peak, and Saturday and Sunday are off-peak all day.
+Peak hours are weekdays **01:00–04:00** and **06:00–10:00 UTC** — DeepSeek
+publishes the timetable in Beijing time, where those windows are 09:00–12:00 and
+14:00–18:00. Every other instant is off-peak; Saturday and Sunday are off-peak
+all day; and so is a **Chinese public holiday**, whichever day of the week it
+falls on.
 
 Windows are half-open — `[01:00, 04:00)` — so a boundary instant belongs to the
 window that starts there: 04:00 is off-peak, 06:00 is peak, 10:00 is off-peak.
 
-This timetable is the whole of the billing math. It lives in `lib/Schedule.js`
-and is pure and I/O-free: every function takes the instant it should reason
-about, so nothing reads the clock implicitly.
+This timetable is the whole of the billing math. It lives in `lib/Schedule.js`,
+which is pure and I/O-free: every function takes the instant it should reason
+about and the holiday table it should consult, so nothing reads the clock
+implicitly and nothing reaches for the network.
+
+## Chinese public holidays
+
+DeepSeek's own words: peak is 北京时间周一至周五（不含中国法定节假日）
+9:00-12:00、14:00-18:00, and 其余时段，包括周末及中国法定节假日全天均为空闲时段.
+Two consequences, and this plugin had neither:
+
+- a Chinese public holiday that falls on a Monday to Friday has **no peak
+  windows at all**, where the weekday rule alone would schedule two;
+- the weekends the State Council designates as make-up workdays
+  (调休上班的周末) are billed off-peak as well — which is what a weekend already
+  is here, so those dates change nothing and are not stored.
+
+The dates are **fetched and cached**, not guessed. `lib/Holidays.js` names the
+source — [holiday-cn](https://github.com/NateScarlet/holiday-cn), a
+machine-readable transcription of 国务院办公厅's annual 部分节假日安排通知 that
+carries the paper it came from — and the cache lives at
+`$XDG_CACHE_HOME/deepseek-offpeak-holidays-<year>.json` (so `~/.cache/…` unless
+that variable says otherwise). The shell reads the cache at startup and refreshes
+it weekly; the CLI reads the same cache and fetches only when it is missing or a
+week old, so `deepseek-offpeak status` on a warm cache makes no request for it. A
+year whose arrangement is not published yet — the notice comes out in early
+November — is not asked for until 60 days before it starts, rather than 404ing
+once a week all year.
+
+**Nothing about this can break the schedule.** A cache that is missing,
+unreadable, oversized, stale, or not the documented shape is skipped, a fetch
+that fails leaves the table exactly as it was, and a year with no data at all
+falls back to the weekday rule — which is what the plugin did before any of this
+existed. The offline floor is the 2026 notice baked into `lib/Holidays.js`, and
+the schedule sentence the panel and the CLI print names the years the table
+covers, which is the visible sign the fetched data is being read at all.
+
+Fetched names are display text, so they are parsed strictly: a name with a
+control character in it, a date that does not exist, or a document that strays
+outside the year it declares rejects the whole document rather than half of it.
 
 ## Install
 
@@ -43,9 +86,10 @@ omarchy plugin remove deepseek-offpeak
 
 ## The balance (optional)
 
-The balance is the only part that touches the network, and it is strictly
-additive — every failure path leaves the schedule untouched. The key is read
-from two places, in this order:
+The balance is the only part that talks to DeepSeek, and it is strictly additive
+— every failure path leaves the schedule untouched. (The holiday table is the
+plugin's other network call; it goes to a static CDN and is described above.) The
+key is read from two places, in this order:
 
 1. **the environment**, `DEEPSEEK_API_KEY`;
 2. **the key file**, `~/.config/deepseek-offpeak/key`, as a fallback.
@@ -125,6 +169,7 @@ before running the checks below.
 
 ```sh
 node tests/schedule.test.js
+node tests/holidays.test.js
 node tests/balance.test.js
 node tests/status.test.js
 ```
@@ -132,8 +177,12 @@ node tests/status.test.js
 No dependencies — each file is a plain node script that exits non-zero on
 failure. `schedule.test.js` pins instants in UTC and asserts the state, the
 boundaries, and the countdown, with the four boundary times (04:00, 10:00,
-01:00, 06:00) and the weekend cases covered explicitly. `balance.test.js` and
-`status.test.js` cover the failure paths without a network.
+01:00, 06:00), the weekend cases, and the holiday runs covered explicitly —
+including the Spring Festival stretch, which is longer than any fixed horizon and
+is the case a walked one exists for. `holidays.test.js` checks the baked table
+against the notice it was transcribed from and the parse against the shapes a
+broken or hostile document can take. `balance.test.js` and `status.test.js` cover
+the failure paths without a network.
 
 For an optional host-only QML import/parser smoke check, run:
 
@@ -160,6 +209,7 @@ and publishes it only after validation succeeds.
 | `BarWidget.qml` | the bar widget |
 | `Panel.qml` | the popup, including the day timeline and the notification switch |
 | `lib/Schedule.js` | the billing-window math; pure and I/O-free |
+| `lib/Holidays.js` | the Chinese holiday table: source, cache, parse, and the baked fallback |
 | `lib/Balance.js` | `/user/balance` response handling and key resolution |
 | `lib/Status.js` | the status report, formatted once for both consumers |
 | `bin/deepseek-offpeak` | the CLI |

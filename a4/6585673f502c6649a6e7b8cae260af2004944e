@@ -1,0 +1,19 @@
+manifest.json
+  s_382d394313b464::t_79053ec84e60ea 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a46585673f502c6649a6e7b8cae260af2004944e",
+  "prompts": {},
+  "sessions": {
+    "s_382d394313b464": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18142b08-3ae9-4d44-bf6e-86e1e1feab5a",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "DavidHLP <144919470+DavidHLP@users.noreply.github.com>"
+    }
+  }
+}

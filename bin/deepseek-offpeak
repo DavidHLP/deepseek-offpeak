@@ -94,16 +94,30 @@ function readHolidayCache(cacheHome, year) {
 
 function fetchHolidays(cacheHome, year) {
   const spec = Holidays.fetchSpec(cacheHome, year)
-  spawnSync(spec.command[0], spec.command.slice(1), {
+  const child = spawnSync(spec.command[0], spec.command.slice(1), {
     encoding: "utf8",
     timeout: spec.timeoutMs,
     maxBuffer: Holidays.MAX_CACHE_BYTES,
     killSignal: "SIGKILL"
   })
+  // The fetch wrote a temporary file, and only a transfer that finished is
+  // published — a rename inside the cache directory, so the cache is replaced
+  // whole or not at all and a failed fetch leaves the old document readable.
+  // (The shell does the same move as a queue step; see publishSpec.)
+  if (child.status !== 0) return false
+  try {
+    fs.renameSync(Holidays.tmpPath(cacheHome, year), Holidays.cachePath(cacheHome, year))
+  } catch (e) {
+    return false
+  }
+  return true
 }
 
 function resolveHolidays(nowMs) {
   const cacheHome = Holidays.cacheHome(process.env.XDG_CACHE_HOME, os.homedir())
+  // No cache home — no XDG variable and no home — is no cache to read and
+  // nowhere to write one, so the baked table answers and nothing is fetched.
+  if (cacheHome === "") return Holidays.fallback()
   const thisYear = Schedule.beijingYear(nowMs)
   const fetchNextYear = Schedule.beijingYear(nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > thisYear
 

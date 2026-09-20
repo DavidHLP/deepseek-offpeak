@@ -55,9 +55,12 @@ once a week all year.
 unreadable, oversized, stale, or not the documented shape is skipped, a fetch
 that fails leaves the table exactly as it was, and a year with no data at all
 falls back to the weekday rule — which is what the plugin did before any of this
-existed. The offline floor is the 2026 notice baked into `lib/Holidays.js`, and
-the schedule sentence the panel and the CLI print names the years the table
-covers, which is the visible sign the fetched data is being read at all.
+existed. The fetch writes a temporary file beside the cache and moves it into
+place only once the transfer has finished, so a connection that drops mid-download
+costs the request and not the copy already on disk. The offline floor is the 2026
+notice baked into `lib/Holidays.js`, and the schedule sentence the panel and the
+CLI print names the years the table covers, which is the visible sign the fetched
+data is being read at all.
 
 Fetched names are display text, so they are parsed strictly: a name with a
 control character in it, a date that does not exist, or a document that strays

@@ -166,16 +166,30 @@ check("the cache path comes from the XDG variable, then home", () => {
   // No home and no variable: no path, and every caller treats the cache as absent.
   assert.strictEqual(H.cacheHome(null, null), "")
   assert.strictEqual(H.cacheHome("", ""), "")
+  // Which is also no path in the filesystem root: the join is skipped, not made
+  // against an empty string.
+  assert.strictEqual(H.cachePath("", 2026), "")
+  assert.strictEqual(H.tmpPath("", 2026), "")
+  // Each spec carries that emptiness through instead of filling it in: no
+  // adapter runs a command with a path there, and none of them can name a file
+  // beside the root directory.
+  const emptyFetch = H.fetchSpec("", 2026).command
+  assert.strictEqual(emptyFetch[emptyFetch.indexOf("--output") + 1], "")
+  assert.strictEqual(H.publishSpec("", 2026).command[4], "")
+  assert.strictEqual(H.readSpec("", 2026).command[4], "")
 })
 
-check("the fetch is one bounded curl, writing the cache itself", () => {
+check("the fetch is one bounded curl, writing a temporary file", () => {
   for (const year of [2026, 2027]) {
     const spec = H.fetchSpec("/tmp/cache", year)
     const command = spec.command
     assert.strictEqual(command[0], H.CURL_BINARY, "named by absolute path")
     assert.notStrictEqual(command[0], "curl", "not through PATH")
     assert.ok(command.includes("-f"), "a 404 must fail rather than be cached")
-    assert.strictEqual(command[command.indexOf("--output") + 1], H.cachePath("/tmp/cache", year))
+    // curl truncates the file it is handed before the first byte arrives, so
+    // that file must not be the cache: the move below is what publishes it.
+    assert.strictEqual(command[command.indexOf("--output") + 1], H.tmpPath("/tmp/cache", year))
+    assert.notStrictEqual(command[command.indexOf("--output") + 1], H.cachePath("/tmp/cache", year))
     assert.strictEqual(command[command.indexOf("--max-filesize") + 1], String(H.MAX_CACHE_BYTES))
     assert.strictEqual(command[command.length - 1], H.sourceUrl(year))
     assert.ok(H.sourceUrl(year).includes("/" + year + ".json"), H.sourceUrl(year))
@@ -184,6 +198,17 @@ check("the fetch is one bounded curl, writing the cache itself", () => {
     // literal the module owns.
     assert.ok(command.every((part) => typeof part === "string"))
   }
+})
+
+check("a finished fetch is published by a move, not written over the cache", () => {
+  const spec = H.publishSpec("/tmp/cache", 2026)
+  assert.strictEqual(spec.command[0], H.MV_BINARY, "named by absolute path")
+  assert.deepStrictEqual(spec.command, [H.MV_BINARY, "-f", "--",
+    H.tmpPath("/tmp/cache", 2026), H.cachePath("/tmp/cache", 2026)])
+  assert.strictEqual(spec.path, H.cachePath("/tmp/cache", 2026))
+  // Both names are in the cache directory, so the move is a rename on one
+  // filesystem: the cache is replaced whole or not at all.
+  assert.ok(H.tmpPath("/tmp/cache", 2026).startsWith(H.cachePath("/tmp/cache", 2026)))
 })
 
 check("the read stops one byte past the ceiling", () => {

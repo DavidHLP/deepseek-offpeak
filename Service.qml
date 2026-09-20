@@ -97,8 +97,10 @@ Item {
 
   // The read-and-refresh queue, one step at a time. Two years are read before
   // either is fetched — the current one and the next, so a January that runs
-  // into a new arrangement is already covered — and every fetch is followed by a
-  // read of the file it wrote, which is how fetched data reaches the schedule.
+  // into a new arrangement is already covered — and a fetch is published and
+  // read back, which is how fetched data reaches the schedule. The publish in
+  // between is a rename out of the temporary file curl wrote, so a transfer that
+  // failed is never published over a document that is still good.
   property var holidaySteps: []
   property var holidayStep: null
   property bool holidayStepActive: false
@@ -109,17 +111,32 @@ Item {
   function holidayStepQueue() {
     var year = root.holidayYear
     var steps = [{ kind: "read", year: year }, { kind: "read", year: year + 1 },
-      { kind: "fetch", year: year }, { kind: "read", year: year }]
+      { kind: "fetch", year: year }, { kind: "publish", year: year }, { kind: "read", year: year }]
     // The next year's document is published in early November. Asking for it
     // earlier is a guaranteed 404, so it is asked for only once the year is
     // close enough for it to exist — the same window the CLI uses, from the
     // shared constant.
     if (Schedule.beijingYear(root.nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > year)
-      steps.push({ kind: "fetch", year: year + 1 }, { kind: "read", year: year + 1 })
+      steps.push({ kind: "fetch", year: year + 1 }, { kind: "publish", year: year + 1 },
+        { kind: "read", year: year + 1 })
     return steps
   }
 
+  function holidayStepSpec(step) {
+    if (step.kind === "fetch") return Holidays.fetchSpec(root.holidayCacheHome, step.year)
+    if (step.kind === "publish") return Holidays.publishSpec(root.holidayCacheHome, step.year)
+    return Holidays.readSpec(root.holidayCacheHome, step.year)
+  }
+
   function refreshHolidays() {
+    // No cache home at all — no XDG variable and no HOME — is no cache to read
+    // and nowhere to write one, so the baked table answers and no step is run:
+    // a fetch with no destination is not something to go looking for. The cycle
+    // is still done, because nothing more is coming.
+    if (root.holidayCacheHome === "") {
+      root.holidayCycleDone = true
+      return false
+    }
     if (root.holidayStepActive) return false
     root.holidaySteps = root.holidayStepQueue()
     return root.startHolidayStep()
@@ -143,11 +160,9 @@ Item {
     holidayProc.stdoutDone = false
     holidayProc.stdoutText = ""
     holidayProc.stepSeq = root.holidayStepSeq
-    // The command lives in lib/Holidays.js, shared with the CLI, so the two
+    // The commands live in lib/Holidays.js, shared with the CLI, so the two
     // cannot fetch different years or bound the read differently.
-    holidayProc.command = step.kind === "fetch"
-      ? Holidays.fetchSpec(root.holidayCacheHome, step.year).command
-      : Holidays.readSpec(root.holidayCacheHome, step.year).command
+    holidayProc.command = root.holidayStepSpec(step).command
     holidayProc.running = true
     holidayWatchdog.restart()
     return true
@@ -162,10 +177,19 @@ Item {
     if (holidayProc.exitCode === -1) return false
     if (root.holidayStep.kind === "read" && !holidayProc.stdoutDone) return false
 
+    var step = root.holidayStep
     holidayWatchdog.stop()
     root.holidayStepActive = false
-    if (root.holidayStep.kind === "read")
-      root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, root.holidayStep.year)
+    if (step.kind === "read") {
+      root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, step.year)
+    } else if (step.kind === "fetch" && holidayProc.exitCode !== 0) {
+      // A fetch that failed left a truncated temporary file or none at all, and
+      // publishing either would replace a good document with it. The publish
+      // that follows this fetch is dropped instead, so the cache keeps what it
+      // had — the same rule the read below applies, one step earlier.
+      if (root.holidaySteps.length > 0 && root.holidaySteps[0].kind === "publish")
+        root.holidaySteps = root.holidaySteps.slice(1)
+    }
     root.startHolidayStep()
     return true
   }
@@ -173,8 +197,9 @@ Item {
   // A read that produced a document is adopted; a read that failed, and a fetch,
   // leave every year exactly as it was. That asymmetry is the offline story: the
   // table is only ever replaced by a newer document that parsed, never emptied
-  // by a fetch that did not — and never half-replaced by a curl that wrote the
-  // cache while this read it.
+  // by a fetch that did not — and never half-replaced, because the fetch writes
+  // a temporary file that only a finished transfer publishes and only a complete
+  // read adopts.
   function adoptHolidayCache(exitCode, text, year) {
     if (exitCode !== 0 || String(text) === "") return false
     if (!Holidays.parse(String(text)).ok) return false
@@ -212,7 +237,7 @@ Item {
     command: []
 
     // Bounded by construction on both steps: `head -c` stops one byte past the
-    // size limit, and curl writes the fetch to the cache file rather than to
+    // size limit, and curl writes the fetch to a temporary file rather than to
     // stdout. So the collector holds at most that much — the same reasoning the
     // key-file read uses instead of an unbounded whole-file read.
     stdout: StdioCollector {

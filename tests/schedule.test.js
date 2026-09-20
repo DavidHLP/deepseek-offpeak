@@ -164,21 +164,38 @@ check("off-peak start reported while off-peak is already running", () => {
     "already off-peak: it started when this stretch did")
 })
 
-check("notifications fire once for a transition, once for a startup, never when off", () => {
-  // Startup while off-peak: exactly one, on the first tick.
-  assert.strictEqual(S.notificationForTick(false, false, false, true), "startup")
-  // Every later tick while still off-peak: nothing.
+check("a notification fires once, on the tick that watches off-peak start", () => {
+  // Peak -> off-peak: one notification, on that tick only.
+  assert.strictEqual(S.notificationForTick(true, false, true), "transition")
+  // Every later tick in the same off-peak stretch: nothing.
   for (let i = 0; i < 100; i++) {
-    assert.strictEqual(S.notificationForTick(true, false, false, true), "")
+    assert.strictEqual(S.notificationForTick(false, false, true), "")
   }
-  // Peak -> off-peak: one notification, and only on that tick.
-  assert.strictEqual(S.notificationForTick(true, true, false, true), "transition")
-  assert.strictEqual(S.notificationForTick(true, false, false, true), "")
-  // Startup while peak: nothing (there was no off-peak to announce).
-  assert.strictEqual(S.notificationForTick(false, true, true, true), "")
+  // Starting in off-peak is not an event, and neither is the reverse change.
+  // The shell rebuilds the service on every plugin file change, so a notice at
+  // startup is a notice per edit.
+  assert.strictEqual(S.notificationForTick(false, false, true), "")
+  assert.strictEqual(S.notificationForTick(true, true, true), "")
+  assert.strictEqual(S.notificationForTick(false, true, true), "")
   // A transition while the switch is off: nothing, and the switch stays off.
-  assert.strictEqual(S.notificationForTick(true, true, false, false), "")
-  assert.strictEqual(S.notificationForTick(false, false, false, false), "")
+  assert.strictEqual(S.notificationForTick(true, false, false), "")
+  assert.strictEqual(S.notificationForTick(false, false, false), "")
+})
+
+check("a session announces exactly the off-peak starts that happen while it runs", () => {
+  // Two weekdays of minute ticks through the real schedule, driven the way
+  // Service.qml drives it: compare the state one step ago with the state now.
+  // The count is the number of off-peak starts in that span — no more (no
+  // repeat, nothing announced at startup, which is where the plugin began:
+  // mid-off-peak before Monday's first window) and no fewer.
+  let wasPeak = S.isPeakAt(at(2026, 9, 7, 0, 0))
+  let notices = 0
+  for (let ms = at(2026, 9, 7, 0, 1); ms <= at(2026, 9, 9, 0, 0); ms += 60 * 1000) {
+    const peak = S.isPeakAt(ms)
+    if (S.notificationForTick(wasPeak, peak, true) !== "") notices++
+    wasPeak = peak
+  }
+  assert.strictEqual(notices, 4, `Monday and Tuesday start off-peak twice each: ${notices}`)
 })
 
 check("day segments tile the local day exactly", () => {

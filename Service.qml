@@ -275,28 +275,23 @@ Item {
   // returns to "on" rather than leaving notifications silently dead.
   property bool notificationsEnabled: true
 
-  // `primed` is false until the first tick, which is the one that reports the
-  // state the plugin started in. The decision itself lives in
-  // Schedule.notificationForTick so it is testable outside the shell.
-  property bool primed: false
-
   function setNotificationsEnabled(value) {
     root.notificationsEnabled = value === true
   }
 
-  function notifyOffPeak(reason) {
+  // One notification per off-peak start, and only for a start this session
+  // watched. The decision itself lives in Schedule.notificationForTick, so it is
+  // testable outside the shell; what makes a start watched is the tick below,
+  // which compares the state one second ago with the state now.
+  function notifyOffPeak() {
     // The gate is first, so nothing below can send while the toggle is off.
     if (!root.notificationsEnabled) return
     if (notifier.running) return
 
-    var summary = reason === "startup"
-      ? "DeepSeek off-peak is active"
-      : "DeepSeek off-peak has started"
-    // This fires on entering off-peak (and on the first tick, when the plugin
-    // starts there), so the trailing clause names the pricing in force until
-    // the end of the window being announced — off-peak. `offPeakEndLocal` is
-    // that window's end; saying "peak pricing until then" would contradict the
-    // summary line it is attached to.
+    // The notice announces entering off-peak, so the trailing clause names the
+    // pricing in force until the end of the window being announced — off-peak.
+    // `offPeakEndLocal` is that window's end; saying "peak pricing until then"
+    // would contradict the summary line it is attached to.
     var body = "Ends " + root.offPeakEndLocal + " local (" + root.offPeakEndUtc + " UTC) \u00b7 "
       + Schedule.formatShort(root.billing.secondsToOffPeakEnd) + " left \u00b7 "
       + "off-peak pricing until then"
@@ -304,7 +299,7 @@ Item {
     // Absolute path for the same reason curl gets one: a directory earlier on
     // PATH must not be able to choose what the widget runs.
     notifier.command = ["/usr/bin/notify-send", "-a", "DeepSeek Off-Peak", "-u", "low", "-t", "8000",
-      summary, body]
+      "DeepSeek off-peak has started", body]
     notifier.running = true
   }
 
@@ -314,16 +309,17 @@ Item {
   function tick() {
     var wasPeak = root.peak
     root.nowMs = Date.now()
-    // The holiday table arrives a few seconds in, and a table that corrects
-    // today's state would otherwise look exactly like a transition — peak under
-    // the baked table, off-peak under the fetched one. So the first tick is not
-    // the first tick allowed to notify; the first one after the table settles
-    // is. Deferring also means the notice describes the state that is actually
-    // in force rather than the one the baked table guessed.
-    if (!root.primed && !root.holidayCycleDone) return
-    var decision = Schedule.notificationForTick(root.primed, wasPeak, root.peak, root.notificationsEnabled)
-    root.primed = true
-    if (decision !== "") root.notifyOffPeak(decision)
+    // Nothing is announced before the holiday table settles. A fetched table
+    // can only ever turn a peak day into an off-peak one (holidays are the only
+    // thing it adds), so a plugin that starts before the first read and fetch
+    // would otherwise see peak under the baked table, off-peak under the
+    // fetched one, and call that a start — exactly the spurious notice this
+    // whole design is meant to avoid. Waiting also means the one comparison
+    // that matters, `wasPeak` against `peak`, is made under the table that is
+    // actually in force.
+    if (!root.holidayCycleDone) return
+    var decision = Schedule.notificationForTick(wasPeak, root.peak, root.notificationsEnabled)
+    if (decision !== "") root.notifyOffPeak()
   }
 
   Timer {

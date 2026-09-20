@@ -63,6 +63,20 @@ Fetched names are display text, so they are parsed strictly: a name with a
 control character in it, a date that does not exist, or a document that strays
 outside the year it declares rejects the whole document rather than half of it.
 
+## Notifications
+
+One notice per off-peak start, and only for a start this session watched: the
+plugin compares the state a second ago with the state now, so a service that
+comes up in the middle of off-peak says nothing. That is what keeps the notice
+rare. Starting in off-peak is not an event — the state is on the bar, and
+"off-peak has started" would describe a boundary that may be hours old — and the
+shell rebuilds a plugin's service on every file change and every reload, so a
+notice sent at startup is not once per login, it is once per edit.
+
+Entering off-peak while the shell is running still notifies, including the
+stretch a resume from suspend lands in. The switch in the panel turns the notice
+off for the rest of the session.
+
 ## Install
 
 ```sh

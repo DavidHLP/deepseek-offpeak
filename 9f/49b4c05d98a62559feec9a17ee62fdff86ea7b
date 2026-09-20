@@ -1,0 +1,28 @@
+lib/Schedule.js
+  s_543dde5a7251f2::t_bc7a9726df55b6 466,468-482
+tests/schedule.test.js
+  s_543dde5a7251f2::t_0f84faa27160f0 167-170,172,174-179,181-198
+Service.qml
+  s_543dde5a7251f2::t_2dc77bdf83c78c 286,291-294
+  s_543dde5a7251f2::t_3d5d46b3d3af9a 282-285
+  s_543dde5a7251f2::t_4fa427bd27ef3b 302
+  s_543dde5a7251f2::t_0c4b1ce750e1ef 312-322
+README.md
+  s_543dde5a7251f2::t_114e5fe52f616a 66-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f49b4c05d98a62559feec9a17ee62fdff86ea7b",
+  "prompts": {},
+  "sessions": {
+    "s_543dde5a7251f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cefb3e34-e824-4a42-9d18-153053986270",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "DavidHLP <144919470+DavidHLP@users.noreply.github.com>"
+    }
+  }
+}

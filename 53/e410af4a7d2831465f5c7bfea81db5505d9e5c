@@ -1,0 +1,89 @@
+bin/deepseek-offpeak
+  s_543dde5a7251f2::t_dab1dadaf46221 13-15
+  s_543dde5a7251f2::t_fb636e6704dfd4 17,22
+  s_543dde5a7251f2::t_6af8a11e8637e0 8-11
+  s_543dde5a7251f2::t_58b1a62d6bef0b 37-39
+  s_543dde5a7251f2::t_2fbf4a75fbba3c 160-163
+  s_543dde5a7251f2::t_0c269031674a55 63-126
+README.md
+  s_543dde5a7251f2::t_b3b5637d8f6db6 7-12
+  s_543dde5a7251f2::t_d551f789f1bd72 16-20,25-64
+  s_543dde5a7251f2::t_6dfbf636277107 89-92
+  s_543dde5a7251f2::t_43de21c326b8bb 172,180-185
+  s_543dde5a7251f2::t_810b1a061bdedf 212
+manifest.json
+  s_543dde5a7251f2::t_49fd25df044ed2 8
+lib/Schedule.js
+  s_543dde5a7251f2::t_2572128150e0f1 250,252
+  s_543dde5a7251f2::t_8591b60b985799 355,357
+  s_543dde5a7251f2::t_b674c337cddead 114-127,129-135,137-138,146,148-149,151-152
+  s_543dde5a7251f2::t_394722e9ba215e 419-421
+  s_543dde5a7251f2::t_0198d410c1281b 182-184,186
+  s_543dde5a7251f2::t_d07bce4e140e93 51-79,81-99
+  s_543dde5a7251f2::t_16f6f567b5c290 139-145,147
+  s_543dde5a7251f2::t_2f41e039aa63e7 448,452-461
+  s_543dde5a7251f2::t_0d0a8487308821 231-232
+  s_543dde5a7251f2::t_5fe3ed48c282bf 3-8,10-19,29-39
+  s_543dde5a7251f2::t_f9b10233b83b4d 485-486,489-493
+  s_543dde5a7251f2::t_e33b0a8f321632 371
+  s_543dde5a7251f2::t_c8f0493fac9dfa 267-268
+  s_543dde5a7251f2::t_5ae9240db82912 40
+Service.qml
+  s_543dde5a7251f2::t_1a3891033a903b 638-640,644
+  s_543dde5a7251f2::t_883061f5cd0b16 35
+  s_543dde5a7251f2::t_3162ca8d6d9d54 5
+  s_543dde5a7251f2::t_d3a19fa5f458ad 75-77
+  s_543dde5a7251f2::t_7c34b374f3024a 317-323
+  s_543dde5a7251f2::t_e669410908c676 60,66-74,78-92,98-110,120-131,133-172,178-179,181-270
+  s_543dde5a7251f2::t_4150a90e7930af 111-119
+  s_543dde5a7251f2::t_e869f09d7ce08e 132
+  s_543dde5a7251f2::t_0f2d22bf7a7d47 19-22
+  s_543dde5a7251f2::t_60a4959009f16c 173-177,180
+  s_543dde5a7251f2::t_e17157430d9b05 658-659
+  s_543dde5a7251f2::t_5095cdfe1c7429 93-97
+tests/status.test.js
+  s_543dde5a7251f2::t_c68d4fae1b6412 13
+  s_543dde5a7251f2::t_00a7f83ca4cf5a 162-164,166
+  s_543dde5a7251f2::t_14c5ba8d7914f2 137-161,165,167-169
+tests/schedule.test.js
+  s_543dde5a7251f2::t_6850e58e4f8a1e 12-18
+  s_543dde5a7251f2::t_beffae2355bbd0 295-414
+  s_543dde5a7251f2::t_c1ee6c1b31e480 5-8
+.github/workflows/ci.yml
+  s_543dde5a7251f2::t_b25d15708709fa 42
+.github/workflows/release.yml
+  s_543dde5a7251f2::t_defc4870779581 64
+lib/Holidays.js
+  s_543dde5a7251f2::t_ef0b885fd65066 127-129,131
+  s_543dde5a7251f2::t_b3bb911675b050 1-56,64-126,130,132-173,178-180,182-183,188-294,296-312
+  s_543dde5a7251f2::t_0efb37511b6607 174-177,181,184-187
+  s_543dde5a7251f2::t_eb41cd3df99e47 295
+  s_543dde5a7251f2::t_51bef6d02c2d27 57-63
+lib/Status.js
+  s_543dde5a7251f2::t_00ef9c88094c96 51-56
+  s_543dde5a7251f2::t_129376ee01d30a 101-103
+Panel.qml
+  s_543dde5a7251f2::t_aab6b1e8a5ddfc 576-584
+tests/holidays.test.js
+  s_543dde5a7251f2::t_041c85819bc3fa 129-130,133-140
+  s_543dde5a7251f2::t_5343e7b4ac6ba4 1-22,27-128,131-132,141-199
+  s_543dde5a7251f2::t_ebeca4a5d5162b 23-26
+.gitignore
+  s_543dde5a7251f2::t_1f2fd8ea2969a5 16,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53e410af4a7d2831465f5c7bfea81db5505d9e5c",
+  "prompts": {},
+  "sessions": {
+    "s_543dde5a7251f2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cefb3e34-e824-4a42-9d18-153053986270",
+        "model": "deepseek-v4.1-flash"
+      },
+      "human_author": "DavidHLP <144919470+DavidHLP@users.noreply.github.com>"
+    }
+  }
+}

@@ -81,11 +81,15 @@ function ensureGuardedCacheDir(cacheHome) {
   const paths = Holidays.ancestryPaths(dir)
   if (paths.length === 0) return false
   try {
-    for (let i = 0; i < paths.length; i++) {
-      // lstat, not stat: the mode of each name itself, never of whatever it
-      // might point at, so a symlink cannot borrow a real directory's mode.
-      const mode = fs.lstatSync(paths[i]).mode.toString(16)
-      const ok = i === paths.length - 1 ? Holidays.guardOk(mode) : Holidays.ancestorOk(mode)
+    const stats = paths.map((entry) => fs.lstatSync(entry))
+    const cacheOwner = stats[stats.length - 1].uid
+    for (let i = 0; i < stats.length; i++) {
+      // lstat, not stat: the mode and owner of each name itself, never of
+      // whatever it might point at, so a symlink cannot borrow an identity.
+      const mode = stats[i].mode.toString(16)
+      const ok = i === stats.length - 1
+        ? Holidays.guardOk(mode)
+        : Holidays.ancestorOk(mode, stats[i].uid, cacheOwner)
       if (!ok) return false
     }
     return true

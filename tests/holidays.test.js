@@ -193,16 +193,16 @@ check("the cache path is judged level by level, in one shared form", () => {
   assert.strictEqual(H.guardOk("directory|700"), false, "a human line, not a mode number")
   assert.strictEqual(H.guardOk("41c0 trailing"), false, "anything but hex is refused whole")
 
-  // An ancestor owned by the cache owner or root may be owner-writable. A
-  // different owner must not have write permission or can replace descendants.
+  // The cache owner and root can control the path. A different owner can
+  // change directory permissions even if it is currently read-only.
   const normalMode = (0o40755).toString(16)
   const readonlyMode = (0o40555).toString(16)
   assert.strictEqual(H.ancestorOk(normalMode, "1000", "1000"), true, "cache owner may write its ancestors")
   assert.strictEqual(H.ancestorOk(normalMode, "0", "1000"), true, "root-owned ancestors are trusted")
   assert.strictEqual(H.ancestorOk(normalMode, "1001", "1000"), false,
     "a different owner can replace descendants of a 0755 directory")
-  assert.strictEqual(H.ancestorOk(readonlyMode, "1001", "1000"), true,
-    "a different owner cannot replace descendants without owner-write permission")
+  assert.strictEqual(H.ancestorOk(readonlyMode, "1001", "1000"), false,
+    "a different owner can change permissions before replacing descendants")
   assert.strictEqual(H.ancestorOk((0o40775).toString(16), "1000", "1000"), false, "group-writable")
   assert.strictEqual(H.ancestorOk((0o40757).toString(16), "1000", "1000"), false, "other-writable")
   assert.strictEqual(H.ancestorOk((0o40777).toString(16), "1000", "1000"), false,

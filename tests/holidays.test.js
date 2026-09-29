@@ -183,8 +183,8 @@ check("the cache lives in a directory of its own under the cache home", () => {
 })
 
 check("the cache path is judged level by level, in one shared form", () => {
-  // The raw mode as hex — `stat -c %f` for the shell, `st.mode.toString(16)`
-  // for the CLI — so both adapters hand the verdicts the same numbers.
+  // stat reports each owner UID with its raw mode as hex, so both adapters use
+  // the same ownership and permission verdicts.
   assert.strictEqual(H.guardOk((0o40700).toString(16)), true, "0o40700: a 0700 directory")
   assert.strictEqual(H.guardOk((0o40755).toString(16)), false, "0755 is one anyone can add a name to")
   assert.strictEqual(H.guardOk((0o120777).toString(16)), false, "a symlink is never followed for its type")
@@ -193,18 +193,26 @@ check("the cache path is judged level by level, in one shared form", () => {
   assert.strictEqual(H.guardOk("directory|700"), false, "a human line, not a mode number")
   assert.strictEqual(H.guardOk("41c0 trailing"), false, "anything but hex is refused whole")
 
-  // An ancestor only has to deny writes to anyone else: 0755 is the normal
-  // shape of /home, / and the cache home, and it is not one anyone can swap a
-  // name inside.
-  assert.strictEqual(H.ancestorOk((0o40755).toString(16)), true, "0755: no other user may write here")
-  assert.strictEqual(H.ancestorOk((0o40775).toString(16)), false, "group-writable")
-  assert.strictEqual(H.ancestorOk((0o40757).toString(16)), false, "other-writable")
-  assert.strictEqual(H.ancestorOk((0o40777).toString(16)), false,
+  // An ancestor owned by the cache owner or root may be owner-writable. A
+  // different owner must not have write permission or can replace descendants.
+  const normalMode = (0o40755).toString(16)
+  const readonlyMode = (0o40555).toString(16)
+  assert.strictEqual(H.ancestorOk(normalMode, "1000", "1000"), true, "cache owner may write its ancestors")
+  assert.strictEqual(H.ancestorOk(normalMode, "0", "1000"), true, "root-owned ancestors are trusted")
+  assert.strictEqual(H.ancestorOk(normalMode, "1001", "1000"), false,
+    "a different owner can replace descendants of a 0755 directory")
+  assert.strictEqual(H.ancestorOk(readonlyMode, "1001", "1000"), true,
+    "a different owner cannot replace descendants without owner-write permission")
+  assert.strictEqual(H.ancestorOk((0o40775).toString(16), "1000", "1000"), false, "group-writable")
+  assert.strictEqual(H.ancestorOk((0o40757).toString(16), "1000", "1000"), false, "other-writable")
+  assert.strictEqual(H.ancestorOk((0o40777).toString(16), "1000", "1000"), false,
     "world-writable is exactly what lets a name in it be swapped")
-  assert.strictEqual(H.ancestorOk((0o41777).toString(16)), false,
+  assert.strictEqual(H.ancestorOk((0o41777).toString(16), "0", "1000"), false,
     "sticky does not save it: the owner of a directory renames whatever it holds")
-  assert.strictEqual(H.ancestorOk((0o120777).toString(16)), false, "a symlink is not a level of the path")
-  assert.strictEqual(H.ancestorOk(""), false)
+  assert.strictEqual(H.ancestorOk((0o120777).toString(16), "1000", "1000"), false,
+    "a symlink is not a level of the path")
+  assert.strictEqual(H.ancestorOk("", "1000", "1000"), false)
+  assert.strictEqual(H.ancestorOk(normalMode, "bad-uid", "1000"), false)
 })
 
 check("every prefix of the cache directory is on the chain to check", () => {
@@ -223,16 +231,21 @@ check("the chain passes only when every level does, in order", () => {
   const dir = (0o40700).toString(16)
   const normal = (0o40755).toString(16)
   const loose = (0o40777).toString(16)
-  const ok = [normal, normal, normal, normal, dir]
+  const root = "0:" + normal
+  const owned = "1000:" + normal
+  const cache = "1000:" + dir
+  const ok = [root, root, owned, owned, cache]
 
   assert.strictEqual(H.chainOk(ok.join("\n"), paths.length), true, "the whole path, as stat prints it")
   assert.strictEqual(H.chainOk(ok.join("\n") + "\n", paths.length), true, "the trailing newline stat adds")
-  assert.strictEqual(H.chainOk(loose + "\n" + ok.slice(1).join("\n"), paths.length), false,
+  assert.strictEqual(H.chainOk("0:" + loose + "\n" + ok.slice(1).join("\n"), paths.length), false,
     "one writable level and the path below it can be renamed out from under us")
+  assert.strictEqual(H.chainOk(root + "\n1001:" + normal + "\n" + ok.slice(2).join("\n"), paths.length), false,
+    "an attacker-owned 0755 ancestor can replace the user-owned cache directory")
   assert.strictEqual(H.chainOk(ok.slice(0, 4).join("\n"), paths.length), false,
     "a level stat could not read: one line short, nothing may be written through it")
   assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length), false, "still short")
-  assert.strictEqual(H.chainOk(normal + "\n" + normal + "\n" + normal + "\n" + normal + "\n" + normal,
+  assert.strictEqual(H.chainOk(root + "\n" + root + "\n" + owned + "\n" + owned + "\n" + owned,
     paths.length), false, "the last entry is the cache directory itself: 0700 or not at all")
   assert.strictEqual(H.chainOk("", paths.length), false)
   assert.strictEqual(H.chainOk("", 0), false, "an empty chain is not a verified one")
@@ -249,7 +262,7 @@ check("the cycle makes the cache directory and reads the path back", () => {
   assert.strictEqual(H.prepareSpec("/tmp/cache").command[0], H.MKDIR_BINARY, "named by absolute path")
 
   const verify = H.verifySpec("/tmp/cache")
-  assert.deepStrictEqual(verify.command, [H.STAT_BINARY, "-c", "%f", "--"].concat(paths))
+  assert.deepStrictEqual(verify.command, [H.STAT_BINARY, "-c", "%u:%f", "--"].concat(paths))
   assert.deepStrictEqual(verify.paths, paths)
   assert.strictEqual(verify.command[0], H.STAT_BINARY, "named by absolute path")
 })

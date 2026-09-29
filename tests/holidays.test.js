@@ -157,38 +157,123 @@ check("years are read off the table, ascending and once each", () => {
   assert.deepStrictEqual(H.yearsOf({ "nonsense": "a" }), [])
 })
 
-check("the cache path comes from the XDG variable, then home", () => {
-  const expected = "/tmp/cache/deepseek-offpeak-holidays-2026.json"
+check("the cache lives in a directory of its own under the cache home", () => {
+  const expected = "/tmp/cache/deepseek-offpeak/deepseek-offpeak-holidays-2026.json"
+  assert.strictEqual(H.cacheDir("/tmp/cache"), "/tmp/cache/deepseek-offpeak")
   assert.strictEqual(H.cachePath(H.cacheHome("/tmp/cache", "/home/x"), 2026), expected)
   assert.strictEqual(H.cachePath(H.cacheHome("/tmp/cache/", "/home/x"), 2026), expected, "a trailing slash")
-  assert.strictEqual(H.cachePath(H.cacheHome(null, "/home/x"), 2026), "/home/x/.cache/deepseek-offpeak-holidays-2026.json")
-  assert.strictEqual(H.cachePath(H.cacheHome(undefined, "/home/x/"), 2026), "/home/x/.cache/deepseek-offpeak-holidays-2026.json")
+  assert.strictEqual(H.cachePath(H.cacheHome(null, "/home/x"), 2026), "/home/x/.cache/deepseek-offpeak/deepseek-offpeak-holidays-2026.json")
+  assert.strictEqual(H.cachePath(H.cacheHome(undefined, "/home/x/"), 2026), "/home/x/.cache/deepseek-offpeak/deepseek-offpeak-holidays-2026.json")
   // No home and no variable: no path, and every caller treats the cache as absent.
   assert.strictEqual(H.cacheHome(null, null), "")
   assert.strictEqual(H.cacheHome("", ""), "")
   // Which is also no path in the filesystem root: the join is skipped, not made
   // against an empty string.
+  assert.strictEqual(H.cacheDir(""), "")
   assert.strictEqual(H.cachePath("", 2026), "")
-  assert.strictEqual(H.tmpPath("", 2026), "")
   // Each spec carries that emptiness through instead of filling it in: no
   // adapter runs a command with a path there, and none of them can name a file
   // beside the root directory.
-  const emptyFetch = H.fetchSpec("", 2026).command
+  const emptyFetch = H.fetchSpec("", 2026, "").command
   assert.strictEqual(emptyFetch[emptyFetch.indexOf("--output") + 1], "")
-  assert.strictEqual(H.publishSpec("", 2026).command[4], "")
+  assert.strictEqual(H.publishSpec("", 2026, "").command[4], "")
   assert.strictEqual(H.readSpec("", 2026).command[4], "")
+  assert.strictEqual(H.prepareSpec("").path, "")
+  assert.strictEqual(H.stageSpec("", 2026).command[2], "")
 })
 
-check("the fetch is one bounded curl, writing a temporary file", () => {
+check("the cache path is judged level by level, in one shared form", () => {
+  // The raw mode as hex — `stat -c %f` for the shell, `st.mode.toString(16)`
+  // for the CLI — so both adapters hand the verdicts the same numbers.
+  assert.strictEqual(H.guardOk((0o40700).toString(16)), true, "0o40700: a 0700 directory")
+  assert.strictEqual(H.guardOk((0o40755).toString(16)), false, "0755 is one anyone can add a name to")
+  assert.strictEqual(H.guardOk((0o120777).toString(16)), false, "a symlink is never followed for its type")
+  assert.strictEqual(H.guardOk((0o100644).toString(16)), false, "a file is not the directory")
+  assert.strictEqual(H.guardOk(""), false, "a path stat could not read")
+  assert.strictEqual(H.guardOk("directory|700"), false, "a human line, not a mode number")
+  assert.strictEqual(H.guardOk("41c0 trailing"), false, "anything but hex is refused whole")
+
+  // An ancestor only has to deny writes to anyone else: 0755 is the normal
+  // shape of /home, / and the cache home, and it is not one anyone can swap a
+  // name inside.
+  assert.strictEqual(H.ancestorOk((0o40755).toString(16)), true, "0755: no other user may write here")
+  assert.strictEqual(H.ancestorOk((0o40775).toString(16)), false, "group-writable")
+  assert.strictEqual(H.ancestorOk((0o40757).toString(16)), false, "other-writable")
+  assert.strictEqual(H.ancestorOk((0o40777).toString(16)), false,
+    "world-writable is exactly what lets a name in it be swapped")
+  assert.strictEqual(H.ancestorOk((0o41777).toString(16)), false,
+    "sticky does not save it: the owner of a directory renames whatever it holds")
+  assert.strictEqual(H.ancestorOk((0o120777).toString(16)), false, "a symlink is not a level of the path")
+  assert.strictEqual(H.ancestorOk(""), false)
+})
+
+check("every prefix of the cache directory is on the chain to check", () => {
+  assert.deepStrictEqual(H.ancestryPaths("/home/x/.cache/deepseek-offpeak"),
+    ["/", "/home", "/home/x", "/home/x/.cache", "/home/x/.cache/deepseek-offpeak"])
+  assert.deepStrictEqual(H.ancestryPaths("/deepseek-offpeak"), ["/", "/deepseek-offpeak"])
+  // No path, no chain: a caller with no cache home checks nothing and uses
+  // nothing, rather than walking a chain built out of an empty string.
+  assert.deepStrictEqual(H.ancestryPaths(""), [])
+  assert.deepStrictEqual(H.ancestryPaths(null), [])
+  assert.deepStrictEqual(H.ancestryPaths("relative/path"), [])
+})
+
+check("the chain passes only when every level does, in order", () => {
+  const paths = H.ancestryPaths("/home/x/.cache/deepseek-offpeak")
+  const dir = (0o40700).toString(16)
+  const normal = (0o40755).toString(16)
+  const loose = (0o40777).toString(16)
+  const ok = [normal, normal, normal, normal, dir]
+
+  assert.strictEqual(H.chainOk(ok.join("\n"), paths.length), true, "the whole path, as stat prints it")
+  assert.strictEqual(H.chainOk(ok.join("\n") + "\n", paths.length), true, "the trailing newline stat adds")
+  assert.strictEqual(H.chainOk(loose + "\n" + ok.slice(1).join("\n"), paths.length), false,
+    "one writable level and the path below it can be renamed out from under us")
+  assert.strictEqual(H.chainOk(ok.slice(0, 4).join("\n"), paths.length), false,
+    "a level stat could not read: one line short, nothing may be written through it")
+  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length), false, "still short")
+  assert.strictEqual(H.chainOk(normal + "\n" + normal + "\n" + normal + "\n" + normal + "\n" + normal,
+    paths.length), false, "the last entry is the cache directory itself: 0700 or not at all")
+  assert.strictEqual(H.chainOk("", paths.length), false)
+  assert.strictEqual(H.chainOk("", 0), false, "an empty chain is not a verified one")
+})
+
+check("the cycle makes the cache directory and reads the path back", () => {
+  const paths = ["/", "/tmp", "/tmp/cache", "/tmp/cache/deepseek-offpeak"]
+  // Created owner-only, and never judged by its own exit code: `mkdir -p`
+  // succeeds through an existing symlink, so what decides is the stat that
+  // follows — one process over every level of the path, in the order the
+  // verdicts are applied.
+  assert.deepStrictEqual(H.prepareSpec("/tmp/cache").command,
+    [H.MKDIR_BINARY, "-p", "-m", "0700", "--", "/tmp/cache/deepseek-offpeak"])
+  assert.strictEqual(H.prepareSpec("/tmp/cache").command[0], H.MKDIR_BINARY, "named by absolute path")
+
+  const verify = H.verifySpec("/tmp/cache")
+  assert.deepStrictEqual(verify.command, [H.STAT_BINARY, "-c", "%f", "--"].concat(paths))
+  assert.deepStrictEqual(verify.paths, paths)
+  assert.strictEqual(verify.command[0], H.STAT_BINARY, "named by absolute path")
+})
+
+check("a fetch stages a file exclusively before curl is handed any path", () => {
+  const dir = "/tmp/cache/deepseek-offpeak"
+  const staged = dir + "/deepseek-offpeak-holidays-2026.XXXXXX"
+
+  const stage = H.stageSpec("/tmp/cache", 2026)
+  assert.strictEqual(stage.command[0], H.MKTEMP_BINARY, "named by absolute path")
+  assert.strictEqual(stage.command[stage.command.length - 1], staged)
+  assert.ok(/\.XXXXXX$/.test(staged), "the template mktemp needs at the end")
+  assert.ok(staged.startsWith(dir), "staged inside the guarded directory, so the move is one rename")
+
   for (const year of [2026, 2027]) {
-    const spec = H.fetchSpec("/tmp/cache", year)
+    const spec = H.fetchSpec("/tmp/cache", year, staged)
     const command = spec.command
     assert.strictEqual(command[0], H.CURL_BINARY, "named by absolute path")
     assert.notStrictEqual(command[0], "curl", "not through PATH")
     assert.ok(command.includes("-f"), "a 404 must fail rather than be cached")
     // curl truncates the file it is handed before the first byte arrives, so
-    // that file must not be the cache: the move below is what publishes it.
-    assert.strictEqual(command[command.indexOf("--output") + 1], H.tmpPath("/tmp/cache", year))
+    // that file must be the one mktemp just created — never the cache, and
+    // never a name that was not handed in by the caller.
+    assert.strictEqual(command[command.indexOf("--output") + 1], staged)
     assert.notStrictEqual(command[command.indexOf("--output") + 1], H.cachePath("/tmp/cache", year))
     assert.strictEqual(command[command.indexOf("--max-filesize") + 1], String(H.MAX_CACHE_BYTES))
     assert.strictEqual(command[command.length - 1], H.sourceUrl(year))
@@ -198,17 +283,16 @@ check("the fetch is one bounded curl, writing a temporary file", () => {
     // literal the module owns.
     assert.ok(command.every((part) => typeof part === "string"))
   }
-})
 
-check("a finished fetch is published by a move, not written over the cache", () => {
-  const spec = H.publishSpec("/tmp/cache", 2026)
-  assert.strictEqual(spec.command[0], H.MV_BINARY, "named by absolute path")
-  assert.deepStrictEqual(spec.command, [H.MV_BINARY, "-f", "--",
-    H.tmpPath("/tmp/cache", 2026), H.cachePath("/tmp/cache", 2026)])
-  assert.strictEqual(spec.path, H.cachePath("/tmp/cache", 2026))
-  // Both names are in the cache directory, so the move is a rename on one
-  // filesystem: the cache is replaced whole or not at all.
-  assert.ok(H.tmpPath("/tmp/cache", 2026).startsWith(H.cachePath("/tmp/cache", 2026)))
+  const publish = H.publishSpec("/tmp/cache", 2026, staged)
+  assert.strictEqual(publish.command[0], H.MV_BINARY, "named by absolute path")
+  assert.deepStrictEqual(publish.command, [H.MV_BINARY, "-f", "--", staged, H.cachePath("/tmp/cache", 2026)])
+  assert.strictEqual(publish.path, H.cachePath("/tmp/cache", 2026))
+  assert.ok(staged.startsWith(H.cacheDir("/tmp/cache")), "both names are in the cache directory")
+
+  // A staged file that never became a document is removed, not left for the
+  // next weekly refresh to find.
+  assert.deepStrictEqual(H.discardSpec(staged).command, [H.RM_BINARY, "-f", "--", staged])
 })
 
 check("the read stops one byte past the ceiling", () => {

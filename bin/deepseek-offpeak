@@ -60,6 +60,40 @@ function resolveApiKey() {
   return Balance.resolveKey(fromEnvironment, child.stdout || "", child.status === 0)
 }
 
+// The cache directory before anything touches it: created if absent, then the
+// whole path down to it checked with the verdict lib/Holidays.js shares with
+// the shell — every level a real directory no other user may write to, and the
+// directory itself one of ours alone. What that buys is that no name on the path
+// can be swapped after the check: writing into a directory, or renaming an
+// entry inside one, needs its write bit, and a chain that denies it is a chain
+// whose path still means what it meant a moment ago. A cache directory that is a
+// symlink, somebody else's, or looser than 0700 is not a cache to us, and the
+// caller falls back to the table baked into lib/Holidays.js.
+function ensureGuardedCacheDir(cacheHome) {
+  const dir = Holidays.cacheDir(cacheHome)
+  if (dir === "") return false
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  } catch (e) {
+    // The chain below is what decides; a directory this could not create is one
+    // the check will not accept either.
+  }
+  const paths = Holidays.ancestryPaths(dir)
+  if (paths.length === 0) return false
+  try {
+    for (let i = 0; i < paths.length; i++) {
+      // lstat, not stat: the mode of each name itself, never of whatever it
+      // might point at, so a symlink cannot borrow a real directory's mode.
+      const mode = fs.lstatSync(paths[i]).mode.toString(16)
+      const ok = i === paths.length - 1 ? Holidays.guardOk(mode) : Holidays.ancestorOk(mode)
+      if (!ok) return false
+    }
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 // The holiday table, read before fetched: the cached documents for this Beijing
 // year and the next, merged over the table baked into lib/Holidays.js. The cache
 // is the one Service.qml keeps, so the widget and this command schedule from the
@@ -72,42 +106,86 @@ function resolveApiKey() {
 // counts as a valid document. A failed fetch is not an error to report — it
 // leaves the previous table in place, which is exactly what a status readout
 // needs from it.
+//
+// The read itself is one descriptor, opened once: O_NOFOLLOW refuses a link on
+// the name, O_NONBLOCK makes a FIFO answer now instead of waiting for a writer,
+// and the fstat that follows describes that same descriptor — so what is sized
+// and what is read are the same object, with no second lookup in between for a
+// replacement file to slip through. The bytes are bounded by one read into a
+// ceiling-plus-one buffer: a file that has grown is too large to be believed
+// before any of it is parsed.
 function readHolidayCache(cacheHome, year) {
   const spec = Holidays.readSpec(cacheHome, year)
-  let stats
+  let fd
   try {
-    stats = fs.statSync(spec.path)
+    fd = fs.openSync(spec.path,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
   } catch (e) {
     return null
   }
-  if (!stats.isFile() || stats.size > Holidays.MAX_CACHE_BYTES) return null
+  try {
+    const stats = fs.fstatSync(fd)
+    if (!stats.isFile() || stats.size > Holidays.MAX_CACHE_BYTES) return null
 
-  let text
-  try {
-    text = fs.readFileSync(spec.path, "utf8")
+    const buffer = Buffer.alloc(Holidays.MAX_CACHE_BYTES + 1)
+    let total = 0
+    while (total < buffer.length) {
+      const read = fs.readSync(fd, buffer, total, buffer.length - total, total)
+      if (read === 0) break
+      total += read
+    }
+    if (total > Holidays.MAX_CACHE_BYTES) return null
+
+    const text = buffer.toString("utf8", 0, total)
+    if (!Holidays.parse(text).ok) return null
+    return { text: text, stale: Date.now() - stats.mtimeMs >= Holidays.STALE_AFTER_MS }
   } catch (e) {
     return null
+  } finally {
+    try { fs.closeSync(fd) } catch (e) {}
   }
-  if (!Holidays.parse(text).ok) return null
-  return { text: text, stale: Date.now() - stats.mtimeMs >= Holidays.STALE_AFTER_MS }
 }
 
+// Removes a staging file that never became a document. Unlink, not a spawned
+// rm: the file is ours inside a directory that has just been accepted, so the
+// syscall is the whole operation — no second process and no second look at the
+// name.
+function discardStaged(stagedPath) {
+  try { fs.unlinkSync(stagedPath) } catch (e) {}
+}
+
+// Fetches one year into the shared cache. Staged first: mktemp creates the
+// file exclusively (O_CREAT|O_EXCL, mode 0600) inside the guarded directory, so
+// curl is handed a file that exists because we just made it, never a name that
+// could already be a link to something else. Only a transfer that exited zero is
+// renamed into place, so the document is replaced whole or not at all, and a
+// failure removes what it staged.
 function fetchHolidays(cacheHome, year) {
-  const spec = Holidays.fetchSpec(cacheHome, year)
+  const stage = Holidays.stageSpec(cacheHome, year)
+  const staged = spawnSync(stage.command[0], stage.command.slice(1), {
+    encoding: "utf8",
+    timeout: stage.timeoutMs,
+    maxBuffer: 4096,
+    killSignal: "SIGKILL"
+  })
+  const stagedPath = staged.status === 0 ? String(staged.stdout || "").trim() : ""
+  if (stagedPath === "") return false
+
+  const spec = Holidays.fetchSpec(cacheHome, year, stagedPath)
   const child = spawnSync(spec.command[0], spec.command.slice(1), {
     encoding: "utf8",
     timeout: spec.timeoutMs,
     maxBuffer: Holidays.MAX_CACHE_BYTES,
     killSignal: "SIGKILL"
   })
-  // The fetch wrote a temporary file, and only a transfer that finished is
-  // published — a rename inside the cache directory, so the cache is replaced
-  // whole or not at all and a failed fetch leaves the old document readable.
-  // (The shell does the same move as a queue step; see publishSpec.)
-  if (child.status !== 0) return false
+  if (child.status !== 0) {
+    discardStaged(stagedPath)
+    return false
+  }
   try {
-    fs.renameSync(Holidays.tmpPath(cacheHome, year), Holidays.cachePath(cacheHome, year))
+    fs.renameSync(stagedPath, Holidays.cachePath(cacheHome, year))
   } catch (e) {
+    discardStaged(stagedPath)
     return false
   }
   return true
@@ -117,7 +195,9 @@ function resolveHolidays(nowMs) {
   const cacheHome = Holidays.cacheHome(process.env.XDG_CACHE_HOME, os.homedir())
   // No cache home — no XDG variable and no home — is no cache to read and
   // nowhere to write one, so the baked table answers and nothing is fetched.
-  if (cacheHome === "") return Holidays.fallback()
+  // Neither is a cache directory the guard refuses: no reads from a directory
+  // this process cannot vouch for, so nothing planted there reaches the table.
+  if (cacheHome === "" || !ensureGuardedCacheDir(cacheHome)) return Holidays.fallback()
   const thisYear = Schedule.beijingYear(nowMs)
   const fetchNextYear = Schedule.beijingYear(nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > thisYear
 

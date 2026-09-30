@@ -43,11 +43,12 @@ The dates are **fetched and cached**, not guessed. `lib/Holidays.js` names the
 source — [holiday-cn](https://github.com/NateScarlet/holiday-cn), a
 machine-readable transcription of 国务院办公厅's annual 部分节假日安排通知 that
 carries the paper it came from — and the cache lives at
-`$XDG_CACHE_HOME/deepseek-offpeak-holidays-<year>.json` (so `~/.cache/…` unless
-that variable says otherwise). The shell reads the cache at startup and refreshes
-it weekly; the CLI reads the same cache and fetches only when it is missing or a
-week old, so `deepseek-offpeak status` on a warm cache makes no request for it. A
-year whose arrangement is not published yet — the notice comes out in early
+`$XDG_CACHE_HOME/deepseek-offpeak/deepseek-offpeak-holidays-<year>.json` (so
+`~/.cache/deepseek-offpeak/…` unless that variable says otherwise). The shell
+reads the cache at startup and refreshes it weekly; the CLI reads the same cache
+and fetches only when it is missing or a week old, so `deepseek-offpeak status`
+on a warm cache makes no request for it. A year whose arrangement is not
+published yet — the notice comes out in early
 November — is not asked for until 60 days before it starts, rather than 404ing
 once a week all year.
 
@@ -55,12 +56,19 @@ once a week all year.
 unreadable, oversized, stale, or not the documented shape is skipped, a fetch
 that fails leaves the table exactly as it was, and a year with no data at all
 falls back to the weekday rule — which is what the plugin did before any of this
-existed. The fetch writes a temporary file beside the cache and moves it into
-place only once the transfer has finished, so a connection that drops mid-download
-costs the request and not the copy already on disk. The offline floor is the 2026
-notice baked into `lib/Holidays.js`, and the schedule sentence the panel and the
-CLI print names the years the table covers, which is the visible sign the fetched
-data is being read at all.
+existed. Before any of it runs, the whole path down to the cache directory is
+checked level by level — every part a real directory no other user may write to,
+and the cache directory itself 0700 — so no name on that path can be replaced
+between the check and the use. A cache home reached through a symlink, or under a
+directory others can write in, is not used at all. Within it, a fetch is staged
+in a file `mktemp` creates exclusively and renamed into place only once the
+transfer has finished, so a connection that drops mid-download costs the request
+and not the copy already on disk; the CLI reads that copy through one descriptor
+that refuses to follow a link, so a FIFO or a link planted on the name stalls
+nothing and reaches nothing. The offline floor is the 2026 notice baked into
+`lib/Holidays.js`, and the schedule sentence the panel and the CLI print names
+the years the table covers, which is the visible sign the fetched data is being
+read at all.
 
 Fetched names are display text, so they are parsed strictly: a name with a
 control character in it, a date that does not exist, or a document that strays

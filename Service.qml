@@ -90,42 +90,84 @@ Item {
   // rebuilt from all of them: a year that fails to read must not drop another.
   property var holidayCacheTexts: ({})
 
+  // The staging file the step queue created for the fetch in flight — the name
+  // mktemp printed, handed to the fetch that writes it, to the publish that
+  // renames it, and to the discard that removes it if neither happened. Empty
+  // when nothing is staged, which is also what stops a stray discard.
+  property string holidayStagedPath: ""
+
   // True once the first read-and-fetch cycle has finished. Until then the table
   // is the baked one, which may not know this year's holidays at all — so the
   // notification decision waits for it (see tick).
   property bool holidayCycleDone: false
 
-  // The read-and-refresh queue, one step at a time. Two years are read before
+  // The read-and-refresh queue, one step at a time. The cycle records the
+  // effective UID, checks existing path prefixes, creates the cache directory,
+  // then verifies its whole path at once and judges each level. A verdict that
+  // does not pass drops every step behind it — no read from a path that could
+  // still be swapped, no fetch writing through one. Two years are then read before
   // either is fetched — the current one and the next, so a January that runs
-  // into a new arrangement is already covered — and a fetch is published and
-  // read back, which is how fetched data reaches the schedule. The publish in
-  // between is a rename out of the temporary file curl wrote, so a transfer that
-  // failed is never published over a document that is still good.
+  // into a new arrangement is already covered — and a fetch is staged,
+  // published, and read back, which is how fetched data reaches the schedule.
+  // The publish in between is a rename out of the staging file mktemp created,
+  // so a transfer that failed is never published over a document that is still
+  // good.
   property var holidaySteps: []
   property var holidayStep: null
   property bool holidayStepActive: false
   // Identifies the step in flight, so a callback scheduled for one step can tell
   // that the next one has already started and leave it alone.
   property int holidayStepSeq: 0
+  // A timed-out step holds the queue until its shared stdout collector drains.
+  property int holidayRecoveryPendingSeq: -1
+  property string holidayEffectiveUid: ""
 
   function holidayStepQueue() {
     var year = root.holidayYear
-    var steps = [{ kind: "read", year: year }, { kind: "read", year: year + 1 },
-      { kind: "fetch", year: year }, { kind: "publish", year: year }, { kind: "read", year: year }]
+    var steps = [{ kind: "uid" }, { kind: "preflight" }, { kind: "prepare" }, { kind: "verify" },
+      { kind: "read", year: year }, { kind: "read", year: year + 1 },
+      { kind: "stage", year: year }, { kind: "fetch", year: year }, { kind: "publish", year: year },
+      { kind: "read", year: year }]
     // The next year's document is published in early November. Asking for it
     // earlier is a guaranteed 404, so it is asked for only once the year is
     // close enough for it to exist — the same window the CLI uses, from the
     // shared constant.
     if (Schedule.beijingYear(root.nowMs + Holidays.NEXT_YEAR_FETCH_LEAD_MS) > year)
-      steps.push({ kind: "fetch", year: year + 1 }, { kind: "publish", year: year + 1 },
-        { kind: "read", year: year + 1 })
+      steps.push({ kind: "stage", year: year + 1 }, { kind: "fetch", year: year + 1 },
+        { kind: "publish", year: year + 1 }, { kind: "read", year: year + 1 })
     return steps
   }
 
   function holidayStepSpec(step) {
-    if (step.kind === "fetch") return Holidays.fetchSpec(root.holidayCacheHome, step.year)
-    if (step.kind === "publish") return Holidays.publishSpec(root.holidayCacheHome, step.year)
+    if (step.kind === "uid") return Holidays.uidSpec()
+    if (step.kind === "prepare") return Holidays.prepareSpec(root.holidayCacheHome)
+    if (step.kind === "preflight" || step.kind === "verify") return Holidays.verifySpec(root.holidayCacheHome)
+    if (step.kind === "stage") return Holidays.stageSpec(root.holidayCacheHome, step.year)
+    if (step.kind === "fetch")
+      return Holidays.fetchSpec(root.holidayCacheHome, step.year, root.holidayStagedPath)
+    if (step.kind === "publish")
+      return Holidays.publishSpec(root.holidayCacheHome, step.year, root.holidayStagedPath)
+    if (step.kind === "discard") return Holidays.discardSpec(step.path)
     return Holidays.readSpec(root.holidayCacheHome, step.year)
+  }
+
+  // Takes the named steps back out of the front of the queue. Only what is
+  // immediately next can be dropped, because the queue is ordered and a step
+  // that is no longer reachable must not strand the ones behind it.
+  function dropHolidaySteps(kinds) {
+    var remaining = root.holidaySteps.slice(0)
+    while (remaining.length > 0 && kinds.indexOf(remaining[0].kind) !== -1)
+      remaining = remaining.slice(1)
+    root.holidaySteps = remaining
+  }
+
+  // A step that produced nothing to publish: what would have published it is
+  // dropped, and the staged file — if one exists — is queued to be removed, so
+  // a week with no network leaves the cache directory exactly as it was.
+  function abandonHolidayStep(dropKinds) {
+    root.dropHolidaySteps(dropKinds)
+    if (root.holidayStagedPath !== "")
+      root.holidaySteps = [{ kind: "discard", path: root.holidayStagedPath }].concat(root.holidaySteps)
   }
 
   function refreshHolidays() {
@@ -138,6 +180,8 @@ Item {
       return false
     }
     if (root.holidayStepActive) return false
+    root.holidayStagedPath = ""
+    root.holidayEffectiveUid = ""
     root.holidaySteps = root.holidayStepQueue()
     return root.startHolidayStep()
   }
@@ -155,8 +199,10 @@ Item {
     root.holidayStep = step
     root.holidayStepActive = true
     root.holidayStepSeq++
+    root.holidayRecoveryPendingSeq = -1
 
     holidayProc.exitCode = -1
+    holidayProc.startedForStep = false
     holidayProc.stdoutDone = false
     holidayProc.stdoutText = ""
     holidayProc.stepSeq = root.holidayStepSeq
@@ -168,27 +214,58 @@ Item {
     return true
   }
 
-  // A step is done when it has reported an exit code, and — for a read — when
-  // its stdout is complete: Quickshell emits the collector's streamFinished
-  // before `exited`, so waiting for both is what keeps the next step from
-  // starting on half-collected text.
+  // Every step waits for both the exit code and the collector. Even a step
+  // whose stdout is ignored must drain it before the next process starts, or a
+  // late streamFinished callback could mark the next step's shared flag complete.
   function finishHolidayStep() {
     if (!root.holidayStepActive) return false
     if (holidayProc.exitCode === -1) return false
-    if (root.holidayStep.kind === "read" && !holidayProc.stdoutDone) return false
+    if (!holidayProc.stdoutDone) return false
+    var kind = root.holidayStep.kind
 
     var step = root.holidayStep
     holidayWatchdog.stop()
     root.holidayStepActive = false
-    if (step.kind === "read") {
+    if (step.kind === "uid") {
+      var uid = String(holidayProc.stdoutText).trim()
+      if (holidayProc.exitCode !== 0 || !/^\d+$/.test(uid)) {
+        root.holidayEffectiveUid = ""
+        root.holidaySteps = []
+      } else {
+        root.holidayEffectiveUid = uid
+      }
+    } else if (step.kind === "read") {
       root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, step.year)
+    } else if (step.kind === "preflight" || step.kind === "verify") {
+      // Before mkdir -p, accept only a safe existing prefix; after it, require
+      // the complete chain. This prevents recursive creation from following an
+      // existing symlink parent and still lets us create missing cache dirs.
+      var chain = Holidays.ancestryPaths(Holidays.cacheDir(root.holidayCacheHome))
+      var allowMissingTail = step.kind === "preflight"
+      if (!Holidays.chainOk(holidayProc.stdoutText, chain.length,
+          root.holidayEffectiveUid, allowMissingTail)) {
+        root.holidayEffectiveUid = ""
+        root.holidaySteps = []
+      }
+    } else if (step.kind === "stage") {
+      // The exclusive creation is the step that can fail — a template mktemp
+      // would not take, a directory that stopped being writable. With no
+      // staging file there is nothing to fetch into, so the fetch and its
+      // publish go; the reads behind them still answer from the cache.
+      root.holidayStagedPath = holidayProc.exitCode === 0
+        ? String(holidayProc.stdoutText).trim() : ""
+      if (root.holidayStagedPath === "") root.abandonHolidayStep(["fetch", "publish"])
     } else if (step.kind === "fetch" && holidayProc.exitCode !== 0) {
-      // A fetch that failed left a truncated temporary file or none at all, and
-      // publishing either would replace a good document with it. The publish
-      // that follows this fetch is dropped instead, so the cache keeps what it
-      // had — the same rule the read below applies, one step earlier.
-      if (root.holidaySteps.length > 0 && root.holidaySteps[0].kind === "publish")
-        root.holidaySteps = root.holidaySteps.slice(1)
+      // A fetch that failed left a staging file holding part of a document, and
+      // publishing it would replace a good document with a broken one. The
+      // publish that follows this fetch is dropped instead and the staged file
+      // removed, so the cache keeps what it had — the same rule the read below
+      // applies, one step earlier.
+      root.abandonHolidayStep(["publish"])
+    } else if (step.kind === "publish" && holidayProc.exitCode !== 0) {
+      root.abandonHolidayStep([])
+    } else if (step.kind === "discard") {
+      root.holidayStagedPath = ""
     }
     root.startHolidayStep()
     return true
@@ -198,7 +275,7 @@ Item {
   // leave every year exactly as it was. That asymmetry is the offline story: the
   // table is only ever replaced by a newer document that parsed, never emptied
   // by a fetch that did not — and never half-replaced, because the fetch writes
-  // a temporary file that only a finished transfer publishes and only a complete
+  // a staging file that only a finished transfer publishes and only a complete
   // read adopts.
   function adoptHolidayCache(exitCode, text, year) {
     if (exitCode !== 0 || String(text) === "") return false
@@ -216,15 +293,43 @@ Item {
     return true
   }
 
-  // A step that never reported an exit code — a process that could not start, or
-  // one the watchdog killed — would otherwise leave the queue stopped with the
-  // latch closed. `seq` is the step this was scheduled for: if the queue has
+  // A step that never reported an exit code — a process that could not start,
+  // or one the watchdog killed — would otherwise leave the queue stopped with
+  // the latch closed. `seq` is the step this was scheduled for: if the queue has
   // moved on, there is nothing stuck.
+  //
+  // An unknown outcome is treated as the outcome that cannot cost anything: the
+  // queue moves on, but only past what a failed step would have been dropped
+  // from as well. A fetch whose exit code never arrived must not have its
+  // publish run — that would move a file curl may have been killed inside — a
+  // verify that never answered is a directory that was never accepted, and a
+  // stage that vanished leaves a name nothing else can safely name again.
   function recoverStuckHolidayStep(seq) {
     if (seq !== root.holidayStepSeq) return false
     if (!root.holidayStepActive) return false
+    // onRunningChanged defers recovery in case onExited is still on its way.
+    // If it did arrive, normal completion owns the step once stdout drains.
+    if (holidayProc.exitCode !== -1) return false
     holidayWatchdog.stop()
+    // The next step reuses this collector's stdoutDone/stdoutText fields. Keep
+    // this step active until its late streamFinished callback has drained them.
+    // FailedToStart emits neither exited nor streamFinished. Only a process
+    // that actually started owns a stream that must drain before reuse.
+    if (holidayProc.startedForStep && !holidayProc.stdoutDone) {
+      root.holidayRecoveryPendingSeq = seq
+      return false
+    }
+    var step = root.holidayStep
     root.holidayStepActive = false
+    if (step.kind === "fetch") root.abandonHolidayStep(["publish"])
+    else if (step.kind === "stage") {
+      root.holidayStagedPath = ""
+      root.abandonHolidayStep(["fetch", "publish"])
+    } else if (step.kind === "publish") root.abandonHolidayStep([])
+    else if (step.kind === "uid" || step.kind === "preflight" || step.kind === "verify") {
+      root.holidayEffectiveUid = ""
+      root.holidaySteps = []
+    }
     return root.startHolidayStep()
   }
 
@@ -232,6 +337,7 @@ Item {
     id: holidayProc
     property int exitCode: -1
     property int stepSeq: 0
+    property bool startedForStep: false
     property bool stdoutDone: false
     property string stdoutText: ""
     command: []
@@ -243,11 +349,20 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var seq = holidayProc.stepSeq
         holidayProc.stdoutText = String(text || "")
         holidayProc.stdoutDone = true
+        if (root.holidayRecoveryPendingSeq === seq) {
+          root.holidayRecoveryPendingSeq = -1
+          if (holidayProc.exitCode === -1) root.recoverStuckHolidayStep(seq)
+          else root.finishHolidayStep()
+          return
+        }
         root.finishHolidayStep()
       }
     }
+
+    onStarted: holidayProc.startedForStep = true
 
     onExited: function(code) {
       holidayProc.exitCode = code

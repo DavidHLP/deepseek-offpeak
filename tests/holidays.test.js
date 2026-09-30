@@ -347,6 +347,18 @@ check("the read stops one byte past the ceiling", () => {
   assert.strictEqual(spec.path, H.cachePath("/tmp/cache", 2026))
 })
 
+check("QML holiday steps drain stdout before advancing", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "../Service.qml"), "utf8")
+  const start = source.indexOf("function finishHolidayStep()")
+  const end = source.indexOf("function adoptHolidayCache(", start)
+  assert.ok(start !== -1 && end > start, "find the QML holiday step handler")
+  const handler = source.slice(start, end)
+  const stdoutGate = handler.indexOf("if (!holidayProc.stdoutDone) return false")
+  const nextStep = handler.indexOf("var step = root.holidayStep")
+  assert.ok(stdoutGate !== -1 && stdoutGate < nextStep,
+    "even non-consuming steps must drain their collector before another step starts")
+})
+
 check("CLI does not create cache content through a symlink parent", () => {
   const temp = fs.mkdtempSync(path.join(os.homedir(), ".deepseek-offpeak-test-"))
   try {

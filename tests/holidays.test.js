@@ -464,10 +464,11 @@ check("QML watchdog recovery waits for the timed-out collector", () => {
   const collectorEnd = source.indexOf("onExited: function(code)", collectorStart)
   assert.ok(collectorStart !== -1 && collectorEnd > collectorStart, "find stdout completion callback")
   const collector = source.slice(collectorStart, collectorEnd)
-  const pendingGate = collector.indexOf("root.holidayRecoveryPendingSeq === holidayProc.stepSeq")
+  const seq = collector.indexOf("var seq = holidayProc.stepSeq")
+  const pendingGate = collector.indexOf("root.holidayRecoveryPendingSeq === seq")
   const recover = collector.indexOf("root.recoverStuckHolidayStep", pendingGate)
   const finish = collector.indexOf("root.finishHolidayStep()", pendingGate)
-  assert.ok(pendingGate !== -1 && recover > pendingGate && finish > pendingGate,
+  assert.ok(seq !== -1 && pendingGate > seq && recover > pendingGate && finish > pendingGate,
     "collector completion must resume pending recovery or normal completion for this step")
 })
 

@@ -454,7 +454,7 @@ check("QML watchdog recovery waits for the timed-out collector", () => {
   const recoveryEnd = source.indexOf("  Process {", recoveryStart)
   assert.ok(recoveryStart !== -1 && recoveryEnd > recoveryStart, "find watchdog recovery")
   const recovery = source.slice(recoveryStart, recoveryEnd)
-  const stdoutGate = recovery.indexOf("if (!holidayProc.stdoutDone)")
+  const stdoutGate = recovery.indexOf("if (holidayProc.startedForStep && !holidayProc.stdoutDone)")
   const pendingMark = recovery.indexOf("root.holidayRecoveryPendingSeq = seq")
   const advance = recovery.indexOf("root.startHolidayStep()")
   assert.ok(stdoutGate !== -1 && pendingMark > stdoutGate && advance > pendingMark,
@@ -498,6 +498,172 @@ check("CLI does not create cache content through a symlink parent", () => {
       "reject the symlink parent before creating the cache leaf at its target")
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
+  }
+})
+
+// Execute the actual QML function and signal-handler bodies with a small host
+// adapter. This is a signal-order regression, not a Quickshell runtime test.
+// Quickshell 41651d7's FailedToStart emits runningChanged, with no started,
+// exited or streamFinished; a started process must still drain before reuse.
+function holidayQueueHarness(steps) {
+  const vm = require("vm")
+  const source = fs.readFileSync(path.resolve(__dirname, "../Service.qml"), "utf8")
+  function bodyAfter(marker) {
+    const start = source.indexOf(marker)
+    assert.notStrictEqual(start, -1, "find " + marker)
+    const open = source.indexOf("{", start)
+    let depth = 1
+    let end = open + 1
+    for (; depth > 0 && end < source.length; end++) {
+      if (source[end] === "{") depth++
+      if (source[end] === "}") depth--
+    }
+    assert.strictEqual(depth, 0, "balanced body for " + marker)
+    return source.slice(open + 1, end - 1)
+  }
+  const pending = []
+  const adopted = []
+  const commands = []
+  const root = {
+    holidaySteps: steps.slice(), holidayStep: null, holidayStepActive: false,
+    holidayStepSeq: 0, holidayRecoveryPendingSeq: -1, holidayStagedPath: "",
+    holidayEffectiveUid: "", holidayCycleDone: false, holidayCacheHome: "/unused",
+    holidayStepSpec: step => ({ command: [step.kind] }),
+    adoptHolidayCache: (...args) => adopted.push(args)
+  }
+  const proc = { exitCode: -1, stdoutDone: false, stdoutText: "", stepSeq: 0, running: false }
+  const watchdog = {
+    running: false,
+    restart() { this.running = true; commands.push(proc.command.slice()) },
+    stop() { this.running = false }
+  }
+  const context = vm.createContext({ root, holidayProc: proc, holidayWatchdog: watchdog,
+    Holidays: H, Qt: { callLater: fn => pending.push(fn) } })
+  for (const name of ["dropHolidaySteps", "abandonHolidayStep", "startHolidayStep",
+    "finishHolidayStep", "recoverStuckHolidayStep", "refreshHolidays"]) {
+    const args = { dropHolidaySteps: "kinds", abandonHolidayStep: "dropKinds",
+      recoverStuckHolidayStep: "seq" }[name] || ""
+    root[name] = vm.runInContext(`(function(${args}) {${bodyAfter("function " + name + "(")}})`, context)
+  }
+  const stream = vm.runInContext(`(function(text) {${bodyAfter("onStreamFinished: {")}})`, context)
+  const exited = vm.runInContext(`(function(code) {${bodyAfter("onExited: function(code)")}})`, context)
+  const runningChanged = vm.runInContext(`(function(running) {${bodyAfter("onRunningChanged: {")}})`, context)
+  const startedLine = source.match(/^\s*onStarted: (.+)$/m)
+  assert.ok(startedLine, "track actual Process.started")
+  const started = vm.runInContext(`(function() {${startedLine[1]}})`, context)
+  return { root, proc, watchdog, adopted, commands, stream, exited, started,
+    stopped() { proc.running = false; runningChanged(false) },
+    flush() { while (pending.length) pending.shift()() } }
+}
+
+check("QML normal and nonzero exits require both exit and stdout in either order", () => {
+  for (const code of [0, 7]) for (const streamFirst of [true, false]) {
+    const h = holidayQueueHarness([{ kind: "read", year: 2026 }])
+    h.root.startHolidayStep()
+    h.started()
+    if (streamFirst) h.stream("document")
+    else h.exited(code)
+    assert.strictEqual(h.root.holidayStepActive, true)
+    if (streamFirst) h.exited(code)
+    else h.stream("document")
+    h.stopped()
+    h.flush()
+    assert.deepStrictEqual(h.adopted, [[code, "document", 2026]])
+    assert.strictEqual(h.root.holidayStepActive, false)
+    assert.strictEqual(h.root.holidayCycleDone, true)
+    assert.strictEqual(h.watchdog.running, false)
+  }
+})
+
+check("QML a missing executable releases the queue without a stream callback", () => {
+  const missing = path.join(os.tmpdir(), "deepseek-missing-" + process.pid, "no-such-program")
+  const result = childProcess.spawnSync(missing, [], { encoding: "utf8" })
+  assert.strictEqual(result.error.code, "ENOENT")
+  for (const kind of ["uid", "preflight", "prepare", "verify", "read", "stage", "fetch", "publish", "discard"]) {
+    const h = holidayQueueHarness([{ kind, year: 2026 }])
+    h.root.startHolidayStep()
+    h.stopped() // Replay Quickshell FailedToStart: no started/exited/streamFinished.
+    h.flush()
+    assert.strictEqual(h.root.holidayStepActive, false, kind)
+    assert.strictEqual(h.root.holidayCycleDone, true, kind)
+    assert.strictEqual(h.proc.stdoutDone, false, "do not invent stream completion")
+    assert.strictEqual(h.watchdog.running, false)
+    h.root.holidayStepQueue = () => [{ kind: "read", year: 2026 }]
+    assert.strictEqual(h.root.refreshHolidays(), true, "next refresh is accepted: " + kind)
+    h.started()
+    h.stream("next cycle")
+    h.exited(0)
+    assert.strictEqual(h.root.holidayStepActive, false)
+  }
+})
+
+check("QML fetch startup failure discards staging and leaves the cache untouched", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deepseek-startup-test-"))
+  try {
+    const cache = path.join(temp, "cache.json")
+    const stage = path.join(temp, "stage.json")
+    fs.writeFileSync(cache, "last good document")
+    fs.writeFileSync(stage, "partial transfer")
+    const before = fs.statSync(cache)
+    const h = holidayQueueHarness([{ kind: "fetch" }, { kind: "publish" }, { kind: "read", year: 2026 }])
+    h.root.holidayStagedPath = stage
+    h.root.startHolidayStep()
+    h.stopped()
+    h.flush()
+    assert.strictEqual(h.root.holidayStep.kind, "discard")
+    const command = H.discardSpec(h.root.holidayStep.path).command
+    const result = childProcess.spawnSync(command[0], command.slice(1), { encoding: "utf8" })
+    assert.strictEqual(result.status, 0, result.stderr)
+    h.started()
+    h.stream(result.stdout)
+    h.exited(result.status)
+    assert.strictEqual(h.root.holidayStagedPath, "")
+    assert.strictEqual(h.root.holidayStep.kind, "read")
+    assert.strictEqual(h.proc.startedForStep, false, "reset the previous step's started flag")
+    h.started()
+    h.stream(fs.readFileSync(cache, "utf8"))
+    h.exited(0)
+    assert.strictEqual(h.root.holidayCycleDone, true)
+    assert.deepStrictEqual(h.commands.map(command => command[0]), ["fetch", "discard", "read"])
+    assert.strictEqual(fs.existsSync(stage), false)
+    assert.strictEqual(fs.readFileSync(cache, "utf8"), "last good document")
+    assert.strictEqual(fs.statSync(cache).mtimeMs, before.mtimeMs)
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
+})
+
+check("QML started timeout waits for late output and ignores old deferred recovery", () => {
+  for (const exitBeforeDrain of [false, true]) {
+    const h = holidayQueueHarness([{ kind: "read", year: 2026 }, { kind: "read", year: 2027 }])
+    h.root.startHolidayStep()
+    h.started()
+    const oldSeq = h.root.holidayStepSeq
+    h.stopped()
+    h.flush()
+    assert.strictEqual(h.root.holidayStepSeq, oldSeq, "no collector reuse while draining")
+    assert.strictEqual(h.root.holidayRecoveryPendingSeq, oldSeq)
+    assert.strictEqual(h.root.refreshHolidays(), false)
+    h.stopped() // A second deferred callback remains queued while stdout arrives.
+    if (exitBeforeDrain) h.exited(9)
+    h.stream("old late output")
+    assert.strictEqual(h.root.holidayStepSeq, oldSeq + 1)
+    assert.strictEqual(h.proc.stdoutDone, false)
+    assert.strictEqual(h.proc.stdoutText, "")
+    assert.strictEqual(h.proc.startedForStep, false)
+    h.flush()
+    h.root.recoverStuckHolidayStep(oldSeq)
+    assert.strictEqual(h.root.holidayStepSeq, oldSeq + 1, "stale callbacks do not advance twice")
+    assert.strictEqual(h.root.holidayStepActive, true)
+    h.started()
+    h.exited(0)
+    assert.strictEqual(h.root.holidayStepActive, true, "old stdout cannot finish the new step")
+    h.stream("new output")
+    assert.strictEqual(h.root.holidayCycleDone, true)
+    assert.deepStrictEqual(h.adopted, exitBeforeDrain
+      ? [[9, "old late output", 2026], [0, "new output", 2027]]
+      : [[0, "new output", 2027]])
+    assert.strictEqual(h.commands.length, 2)
   }
 })
 

@@ -202,6 +202,7 @@ Item {
     root.holidayRecoveryPendingSeq = -1
 
     holidayProc.exitCode = -1
+    holidayProc.startedForStep = false
     holidayProc.stdoutDone = false
     holidayProc.stdoutText = ""
     holidayProc.stepSeq = root.holidayStepSeq
@@ -312,7 +313,9 @@ Item {
     holidayWatchdog.stop()
     // The next step reuses this collector's stdoutDone/stdoutText fields. Keep
     // this step active until its late streamFinished callback has drained them.
-    if (!holidayProc.stdoutDone) {
+    // FailedToStart emits neither exited nor streamFinished. Only a process
+    // that actually started owns a stream that must drain before reuse.
+    if (holidayProc.startedForStep && !holidayProc.stdoutDone) {
       root.holidayRecoveryPendingSeq = seq
       return false
     }
@@ -334,6 +337,7 @@ Item {
     id: holidayProc
     property int exitCode: -1
     property int stepSeq: 0
+    property bool startedForStep: false
     property bool stdoutDone: false
     property string stdoutText: ""
     command: []
@@ -357,6 +361,8 @@ Item {
         root.finishHolidayStep()
       }
     }
+
+    onStarted: holidayProc.startedForStep = true
 
     onExited: function(code) {
       holidayProc.exitCode = code

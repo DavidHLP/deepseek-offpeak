@@ -164,6 +164,11 @@ check("years are read off the table, ascending and once each", () => {
 check("the cache lives in a directory of its own under the cache home", () => {
   const expected = "/tmp/cache/deepseek-offpeak/deepseek-offpeak-holidays-2026.json"
   assert.strictEqual(H.cacheDir("/tmp/cache"), "/tmp/cache/deepseek-offpeak")
+  assert.strictEqual(H.cacheHome("/tmp/cache/../target", "/home/x"), "", "reject parent traversal")
+  assert.strictEqual(H.cacheHome("/tmp/cache/./nested", "/home/x"), "", "reject dot components")
+  assert.strictEqual(H.cacheDir("/tmp/cache/../target"), "", "reject traversal for direct callers")
+  assert.deepStrictEqual(H.ancestryPaths("/tmp/cache/../target/deepseek-offpeak"), [],
+    "never build a trusted prefix chain for a path that mkdir normalizes")
   assert.strictEqual(H.cachePath(H.cacheHome("/tmp/cache", "/home/x"), 2026), expected)
   assert.strictEqual(H.cachePath(H.cacheHome("/tmp/cache/", "/home/x"), 2026), expected, "a trailing slash")
   assert.strictEqual(H.cachePath(H.cacheHome(null, "/home/x"), 2026), "/home/x/.cache/deepseek-offpeak/deepseek-offpeak-holidays-2026.json")
@@ -280,13 +285,12 @@ check("the chain binds every owner and mode to the effective UID", () => {
 
 check("the cycle makes the cache directory and reads the path back", () => {
   const paths = ["/", "/tmp", "/tmp/cache", "/tmp/cache/deepseek-offpeak"]
-  // Created owner-only, and never judged by its own exit code: `mkdir -p`
-  // succeeds through an existing symlink, so what decides is the stat that
-  // follows — one process over every level of the path, in the order the
-  // verdicts are applied.
+  // A private umask applies to every missing ancestor; the full-chain stat still
+  // decides whether the resulting path is safe.
   assert.deepStrictEqual(H.prepareSpec("/tmp/cache").command,
-    [H.MKDIR_BINARY, "-p", "-m", "0700", "--", "/tmp/cache/deepseek-offpeak"])
-  assert.strictEqual(H.prepareSpec("/tmp/cache").command[0], H.MKDIR_BINARY, "named by absolute path")
+    ["/bin/sh", "-c", 'umask 077; exec "$1" -p -m 0700 -- "$2"',
+      "deepseek-offpeak-mkdir", H.MKDIR_BINARY, "/tmp/cache/deepseek-offpeak"])
+  assert.strictEqual(H.prepareSpec("/tmp/cache").command[0], "/bin/sh", "named by absolute path")
 
   assert.deepStrictEqual(H.uidSpec().command, [H.ID_BINARY, "-u"])
 
@@ -294,6 +298,27 @@ check("the cycle makes the cache directory and reads the path back", () => {
   assert.deepStrictEqual(verify.command, [H.STAT_BINARY, "-c", "%u:%f", "--"].concat(paths))
   assert.deepStrictEqual(verify.paths, paths)
   assert.strictEqual(verify.command[0], H.STAT_BINARY, "named by absolute path")
+})
+
+check("QML cache preparation keeps every new directory private under a permissive umask", () => {
+  const temp = fs.mkdtempSync(path.join(os.homedir(), ".deepseek-offpeak-test-"))
+  const cacheHome = path.join(temp, "missing", "cache-home")
+  const spec = H.prepareSpec(cacheHome)
+  const oldUmask = process.umask(0o002)
+  try {
+    const result = childProcess.spawnSync(spec.command[0], spec.command.slice(1), {
+      encoding: "utf8",
+      timeout: 5000
+    })
+    assert.strictEqual(result.error, undefined, String(result.error || ""))
+    assert.strictEqual(result.status, 0, result.stderr || "cache preparation should succeed")
+    for (const dir of [path.join(temp, "missing"), cacheHome, spec.path]) {
+      assert.strictEqual(fs.statSync(dir).mode & 0o777, 0o700, dir + " is private")
+    }
+  } finally {
+    process.umask(oldUmask)
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
 })
 
 check("a fetch stages a file exclusively before curl is handed any path", () => {
@@ -357,6 +382,70 @@ check("QML holiday steps drain stdout before advancing", () => {
   const nextStep = handler.indexOf("var step = root.holidayStep")
   assert.ok(stdoutGate !== -1 && stdoutGate < nextStep,
     "even non-consuming steps must drain their collector before another step starts")
+})
+
+check("CLI creates every cache directory privately under a permissive umask", () => {
+  const temp = fs.mkdtempSync(path.join(os.homedir(), ".deepseek-offpeak-test-"))
+  const cacheHome = path.join(temp, "missing", "xdg-cache")
+  const oldUmask = process.umask(0o002)
+  try {
+    const cli = path.resolve(__dirname, "../bin/deepseek-offpeak")
+    const proxy = "127.0.0.1:1"
+    const result = childProcess.spawnSync(process.execPath, [cli, "status"], {
+      cwd: temp,
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        HOME: temp,
+        XDG_CONFIG_HOME: path.join(temp, "config"),
+        XDG_CACHE_HOME: cacheHome,
+        DEEPSEEK_API_KEY: "",
+        ALL_PROXY: proxy,
+        all_proxy: proxy,
+        NO_PROXY: "",
+        no_proxy: "",
+        PATH: process.env.PATH
+      }
+    })
+    assert.strictEqual(result.error, undefined, String(result.error || ""))
+    assert.strictEqual(result.status, 0, result.stderr || "CLI status should remain available")
+    for (const dir of [path.join(temp, "missing"), cacheHome, path.join(cacheHome, "deepseek-offpeak")]) {
+      assert.strictEqual(fs.statSync(dir).mode & 0o777, 0o700, dir + " is private")
+    }
+  } finally {
+    process.umask(oldUmask)
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
+})
+
+check("CLI rejects dot-dot paths before mkdir can normalize and create elsewhere", () => {
+  const temp = fs.mkdtempSync(path.join(os.homedir(), ".deepseek-offpeak-test-"))
+  try {
+    const prefix = path.join(temp, "prefix")
+    const target = path.join(temp, "target")
+    fs.mkdirSync(prefix)
+    fs.mkdirSync(target)
+    const cacheHome = prefix + "/missing/../../target"
+    const cli = path.resolve(__dirname, "../bin/deepseek-offpeak")
+    const result = childProcess.spawnSync(process.execPath, [cli, "status"], {
+      cwd: temp,
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        HOME: temp,
+        XDG_CONFIG_HOME: path.join(temp, "config"),
+        XDG_CACHE_HOME: cacheHome,
+        DEEPSEEK_API_KEY: "",
+        PATH: process.env.PATH
+      }
+    })
+    assert.strictEqual(result.error, undefined, String(result.error || ""))
+    assert.strictEqual(result.status, 0, result.stderr || "CLI status should remain available")
+    assert.strictEqual(fs.existsSync(path.join(target, "deepseek-offpeak")), false,
+      "invalid path components must not create a directory outside the literal chain")
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
 })
 
 check("CLI does not create cache content through a symlink parent", () => {

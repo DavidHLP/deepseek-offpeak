@@ -76,13 +76,17 @@ function ensureGuardedCacheDir(cacheHome) {
   if (paths.length === 0) return false
   try {
     const effectiveUid = process.geteuid()
-    // Validate each existing component before recursive mkdir can follow a link.
+    let firstMissing = paths.length
+    // Validate every existing component before creating the missing suffix.
     for (let i = 0; i < paths.length; i++) {
       let stat
       try {
         stat = fs.lstatSync(paths[i])
       } catch (e) {
-        if (i > 0 && e.code === "ENOENT") break
+        if (i > 0 && e.code === "ENOENT") {
+          firstMissing = i
+          break
+        }
         return false
       }
       const mode = stat.mode.toString(16)
@@ -91,7 +95,21 @@ function ensureGuardedCacheDir(cacheHome) {
         : Holidays.ancestorOk(mode, stat.uid, effectiveUid)
       if (!trusted) return false
     }
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // mkdir's recursive mode does not constrain intermediate directories; make
+    // each one privately so even a permissive inherited umask stays safe.
+    for (let i = firstMissing; i < paths.length; i++) {
+      try {
+        fs.mkdirSync(paths[i], { mode: 0o700 })
+      } catch (e) {
+        if (e.code !== "EEXIST") return false
+      }
+      const stat = fs.lstatSync(paths[i])
+      const mode = stat.mode.toString(16)
+      const trusted = i === paths.length - 1
+        ? Holidays.guardOk(mode, stat.uid, effectiveUid)
+        : Holidays.ancestorOk(mode, stat.uid, effectiveUid)
+      if (!trusted) return false
+    }
     const stats = paths.map((entry) => fs.lstatSync(entry))
     const statText = stats.map((stat) => String(stat.uid) + ":" + stat.mode.toString(16)).join("\n")
     return Holidays.chainOk(statText, paths.length, effectiveUid)

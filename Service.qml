@@ -118,6 +118,8 @@ Item {
   // Identifies the step in flight, so a callback scheduled for one step can tell
   // that the next one has already started and leave it alone.
   property int holidayStepSeq: 0
+  // A timed-out step holds the queue until its shared stdout collector drains.
+  property int holidayRecoveryPendingSeq: -1
   property string holidayEffectiveUid: ""
 
   function holidayStepQueue() {
@@ -197,6 +199,7 @@ Item {
     root.holidayStep = step
     root.holidayStepActive = true
     root.holidayStepSeq++
+    root.holidayRecoveryPendingSeq = -1
 
     holidayProc.exitCode = -1
     holidayProc.stdoutDone = false
@@ -303,8 +306,17 @@ Item {
   function recoverStuckHolidayStep(seq) {
     if (seq !== root.holidayStepSeq) return false
     if (!root.holidayStepActive) return false
-    var step = root.holidayStep
+    // onRunningChanged defers recovery in case onExited is still on its way.
+    // If it did arrive, normal completion owns the step once stdout drains.
+    if (holidayProc.exitCode !== -1) return false
     holidayWatchdog.stop()
+    // The next step reuses this collector's stdoutDone/stdoutText fields. Keep
+    // this step active until its late streamFinished callback has drained them.
+    if (!holidayProc.stdoutDone) {
+      root.holidayRecoveryPendingSeq = seq
+      return false
+    }
+    var step = root.holidayStep
     root.holidayStepActive = false
     if (step.kind === "fetch") root.abandonHolidayStep(["publish"])
     else if (step.kind === "stage") {
@@ -333,8 +345,15 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var seq = holidayProc.stepSeq
         holidayProc.stdoutText = String(text || "")
         holidayProc.stdoutDone = true
+        if (root.holidayRecoveryPendingSeq === seq) {
+          root.holidayRecoveryPendingSeq = -1
+          if (holidayProc.exitCode === -1) root.recoverStuckHolidayStep(seq)
+          else root.finishHolidayStep()
+          return
+        }
         root.finishHolidayStep()
       }
     }

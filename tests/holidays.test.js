@@ -182,37 +182,39 @@ check("the cache lives in a directory of its own under the cache home", () => {
   assert.strictEqual(H.stageSpec("", 2026).command[2], "")
 })
 
-check("the cache path is judged level by level, in one shared form", () => {
-  // stat reports each owner UID with its raw mode as hex, so both adapters use
-  // the same ownership and permission verdicts.
-  assert.strictEqual(H.guardOk((0o40700).toString(16)), true, "0o40700: a 0700 directory")
-  assert.strictEqual(H.guardOk((0o40755).toString(16)), false, "0755 is one anyone can add a name to")
-  assert.strictEqual(H.guardOk((0o120777).toString(16)), false, "a symlink is never followed for its type")
-  assert.strictEqual(H.guardOk((0o100644).toString(16)), false, "a file is not the directory")
-  assert.strictEqual(H.guardOk(""), false, "a path stat could not read")
-  assert.strictEqual(H.guardOk("directory|700"), false, "a human line, not a mode number")
-  assert.strictEqual(H.guardOk("41c0 trailing"), false, "anything but hex is refused whole")
-
-  // The cache owner and root can control the path. A different owner can
-  // change directory permissions even if it is currently read-only.
+check("cache ownership is bound to the effective UID", () => {
+  const uid = "1000"
+  const dir = (0o40700).toString(16)
   const normalMode = (0o40755).toString(16)
   const readonlyMode = (0o40555).toString(16)
-  assert.strictEqual(H.ancestorOk(normalMode, "1000", "1000"), true, "cache owner may write its ancestors")
-  assert.strictEqual(H.ancestorOk(normalMode, "0", "1000"), true, "root-owned ancestors are trusted")
-  assert.strictEqual(H.ancestorOk(normalMode, "1001", "1000"), false,
+
+  assert.strictEqual(H.guardOk(dir, uid, uid), true, "a private cache owned by this process")
+  assert.strictEqual(H.guardOk(dir, "1001", uid), false, "a foreign-owned cache is not trusted")
+  assert.strictEqual(H.guardOk(dir, uid), false, "the expected effective UID is required")
+  assert.strictEqual(H.guardOk((0o40755).toString(16), uid, uid), false, "the cache directory must be private")
+  assert.strictEqual(H.guardOk((0o120777).toString(16), uid, uid), false, "a symlink is never followed for its type")
+  assert.strictEqual(H.guardOk((0o100644).toString(16), uid, uid), false, "a file is not the directory")
+  assert.strictEqual(H.guardOk("", uid, uid), false, "a path stat could not read")
+  assert.strictEqual(H.guardOk("directory|700", uid, uid), false, "a human line, not a mode number")
+  assert.strictEqual(H.guardOk("41c0 trailing", uid, uid), false, "anything but hex is refused whole")
+
+  // An ancestor owned by root or the effective UID is trusted. Another owner
+  // can change its permissions and replace descendants after this check.
+  assert.strictEqual(H.ancestorOk(normalMode, uid, uid), true, "the effective user may write its ancestors")
+  assert.strictEqual(H.ancestorOk(normalMode, "0", uid), true, "root-owned ancestors are trusted")
+  assert.strictEqual(H.ancestorOk(normalMode, "1001", uid), false,
     "a different owner can replace descendants of a 0755 directory")
-  assert.strictEqual(H.ancestorOk(readonlyMode, "1001", "1000"), false,
+  assert.strictEqual(H.ancestorOk(readonlyMode, "1001", uid), false,
     "a different owner can change permissions before replacing descendants")
-  assert.strictEqual(H.ancestorOk((0o40775).toString(16), "1000", "1000"), false, "group-writable")
-  assert.strictEqual(H.ancestorOk((0o40757).toString(16), "1000", "1000"), false, "other-writable")
-  assert.strictEqual(H.ancestorOk((0o40777).toString(16), "1000", "1000"), false,
-    "world-writable is exactly what lets a name in it be swapped")
-  assert.strictEqual(H.ancestorOk((0o41777).toString(16), "0", "1000"), false,
-    "sticky does not save it: the owner of a directory renames whatever it holds")
-  assert.strictEqual(H.ancestorOk((0o120777).toString(16), "1000", "1000"), false,
-    "a symlink is not a level of the path")
-  assert.strictEqual(H.ancestorOk("", "1000", "1000"), false)
-  assert.strictEqual(H.ancestorOk(normalMode, "bad-uid", "1000"), false)
+  assert.strictEqual(H.ancestorOk((0o40775).toString(16), uid, uid), false, "group-writable")
+  assert.strictEqual(H.ancestorOk((0o40757).toString(16), uid, uid), false, "other-writable")
+  assert.strictEqual(H.ancestorOk((0o40777).toString(16), uid, uid), false,
+    "world-writable is rejected")
+  assert.strictEqual(H.ancestorOk((0o41777).toString(16), "0", uid), false,
+    "sticky does not make a world-writable parent safe")
+  assert.strictEqual(H.ancestorOk((0o120777).toString(16), uid, uid), false, "a symlink is not a path directory")
+  assert.strictEqual(H.ancestorOk("", uid, uid), false)
+  assert.strictEqual(H.ancestorOk(normalMode, "bad-uid", uid), false)
 })
 
 check("every prefix of the cache directory is on the chain to check", () => {
@@ -226,29 +228,38 @@ check("every prefix of the cache directory is on the chain to check", () => {
   assert.deepStrictEqual(H.ancestryPaths("relative/path"), [])
 })
 
-check("the chain passes only when every level does, in order", () => {
+check("the chain binds every owner and mode to the effective UID", () => {
   const paths = H.ancestryPaths("/home/x/.cache/deepseek-offpeak")
   const dir = (0o40700).toString(16)
   const normal = (0o40755).toString(16)
   const loose = (0o40777).toString(16)
+  const uid = "1000"
   const root = "0:" + normal
-  const owned = "1000:" + normal
-  const cache = "1000:" + dir
+  const owned = uid + ":" + normal
+  const cache = uid + ":" + dir
   const ok = [root, root, owned, owned, cache]
 
-  assert.strictEqual(H.chainOk(ok.join("\n"), paths.length), true, "the whole path, as stat prints it")
-  assert.strictEqual(H.chainOk(ok.join("\n") + "\n", paths.length), true, "the trailing newline stat adds")
-  assert.strictEqual(H.chainOk("0:" + loose + "\n" + ok.slice(1).join("\n"), paths.length), false,
+  assert.strictEqual(H.chainOk(ok.join("\n"), paths.length, uid), true, "the whole path, as stat prints it")
+  assert.strictEqual(H.chainOk(ok.join("\n") + "\n", paths.length, uid), true, "the trailing newline stat adds")
+  assert.strictEqual(H.chainOk(ok.join("\n"), paths.length, "2000"), false,
+    "a cache owned by a different effective UID is rejected")
+  assert.strictEqual(H.chainOk("0:" + loose + "\n" + ok.slice(1).join("\n"), paths.length, uid), false,
     "one writable level and the path below it can be renamed out from under us")
-  assert.strictEqual(H.chainOk(root + "\n1001:" + normal + "\n" + ok.slice(2).join("\n"), paths.length), false,
+  assert.strictEqual(H.chainOk(root + "\n1001:" + normal + "\n" + ok.slice(2).join("\n"), paths.length, uid), false,
     "an attacker-owned 0755 ancestor can replace the user-owned cache directory")
-  assert.strictEqual(H.chainOk(ok.slice(0, 4).join("\n"), paths.length), false,
+  const foreignCache = ok.slice(0, -1).concat(["1001:" + dir])
+  assert.strictEqual(H.chainOk(foreignCache.join("\n"), paths.length, uid), false,
+    "a privileged process must not trust a cache owned by its caller")
+  assert.strictEqual(H.chainOk("x:" + normal + "\n" + ok.slice(1).join("\n"), paths.length, uid), false,
+    "malformed owner output fails closed")
+  assert.strictEqual(H.chainOk(ok.slice(0, 4).join("\n"), paths.length, uid), false,
     "a level stat could not read: one line short, nothing may be written through it")
-  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length), false, "still short")
+  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length, uid), false, "still short")
   assert.strictEqual(H.chainOk(root + "\n" + root + "\n" + owned + "\n" + owned + "\n" + owned,
-    paths.length), false, "the last entry is the cache directory itself: 0700 or not at all")
-  assert.strictEqual(H.chainOk("", paths.length), false)
-  assert.strictEqual(H.chainOk("", 0), false, "an empty chain is not a verified one")
+    paths.length, uid), false, "the last entry is the cache directory itself: 0700 or not at all")
+  assert.strictEqual(H.chainOk("", paths.length, uid), false)
+  assert.strictEqual(H.chainOk("", 0, uid), false, "an empty chain is not a verified one")
+  assert.strictEqual(H.chainOk(ok.join("\n"), paths.length, "bad-uid"), false, "a malformed effective UID fails closed")
 })
 
 check("the cycle makes the cache directory and reads the path back", () => {
@@ -260,6 +271,8 @@ check("the cycle makes the cache directory and reads the path back", () => {
   assert.deepStrictEqual(H.prepareSpec("/tmp/cache").command,
     [H.MKDIR_BINARY, "-p", "-m", "0700", "--", "/tmp/cache/deepseek-offpeak"])
   assert.strictEqual(H.prepareSpec("/tmp/cache").command[0], H.MKDIR_BINARY, "named by absolute path")
+
+  assert.deepStrictEqual(H.uidSpec().command, [H.ID_BINARY, "-u"])
 
   const verify = H.verifySpec("/tmp/cache")
   assert.deepStrictEqual(verify.command, [H.STAT_BINARY, "-c", "%u:%f", "--"].concat(paths))

@@ -210,15 +210,14 @@ Item {
     return true
   }
 
-  // A step that consumes stdout waits for both the exit code and the collector:
-  // streamFinished may arrive before or after the exit signal, so requiring both
-  // keeps the next step from starting on partial output.
+  // Every step waits for both the exit code and the collector. Even a step
+  // whose stdout is ignored must drain it before the next process starts, or a
+  // late streamFinished callback could mark the next step's shared flag complete.
   function finishHolidayStep() {
     if (!root.holidayStepActive) return false
     if (holidayProc.exitCode === -1) return false
+    if (!holidayProc.stdoutDone) return false
     var kind = root.holidayStep.kind
-    if ((kind === "uid" || kind === "preflight" || kind === "verify" || kind === "read" || kind === "stage")
-        && !holidayProc.stdoutDone) return false
 
     var step = root.holidayStep
     holidayWatchdog.stop()

@@ -101,11 +101,11 @@ Item {
   // notification decision waits for it (see tick).
   property bool holidayCycleDone: false
 
-  // The read-and-refresh queue, one step at a time. The cycle first records the
-  // effective UID, then creates the cache directory and verifies its whole path.
-  // read back at once and judged level by level, and a verdict that does not
-  // pass drops every step behind it — no read from a path that could still be
-  // swapped, no fetch writing through one. Two years are then read before
+  // The read-and-refresh queue, one step at a time. The cycle records the
+  // effective UID, checks existing path prefixes, creates the cache directory,
+  // then verifies its whole path at once and judges each level. A verdict that
+  // does not pass drops every step behind it — no read from a path that could
+  // still be swapped, no fetch writing through one. Two years are then read before
   // either is fetched — the current one and the next, so a January that runs
   // into a new arrangement is already covered — and a fetch is staged,
   // published, and read back, which is how fetched data reaches the schedule.
@@ -122,7 +122,7 @@ Item {
 
   function holidayStepQueue() {
     var year = root.holidayYear
-    var steps = [{ kind: "uid" }, { kind: "prepare" }, { kind: "verify" },
+    var steps = [{ kind: "uid" }, { kind: "preflight" }, { kind: "prepare" }, { kind: "verify" },
       { kind: "read", year: year }, { kind: "read", year: year + 1 },
       { kind: "stage", year: year }, { kind: "fetch", year: year }, { kind: "publish", year: year },
       { kind: "read", year: year }]
@@ -139,7 +139,7 @@ Item {
   function holidayStepSpec(step) {
     if (step.kind === "uid") return Holidays.uidSpec()
     if (step.kind === "prepare") return Holidays.prepareSpec(root.holidayCacheHome)
-    if (step.kind === "verify") return Holidays.verifySpec(root.holidayCacheHome)
+    if (step.kind === "preflight" || step.kind === "verify") return Holidays.verifySpec(root.holidayCacheHome)
     if (step.kind === "stage") return Holidays.stageSpec(root.holidayCacheHome, step.year)
     if (step.kind === "fetch")
       return Holidays.fetchSpec(root.holidayCacheHome, step.year, root.holidayStagedPath)
@@ -217,7 +217,7 @@ Item {
     if (!root.holidayStepActive) return false
     if (holidayProc.exitCode === -1) return false
     var kind = root.holidayStep.kind
-    if ((kind === "uid" || kind === "verify" || kind === "read" || kind === "stage")
+    if ((kind === "uid" || kind === "preflight" || kind === "verify" || kind === "read" || kind === "stage")
         && !holidayProc.stdoutDone) return false
 
     var step = root.holidayStep
@@ -233,15 +233,14 @@ Item {
       }
     } else if (step.kind === "read") {
       root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, step.year)
-    } else if (step.kind === "verify") {
-      // The gate on the whole cycle. `mkdir -p` behind this happily succeeds
-      // through an existing symlink, which is why its own exit code is not the
-      // verdict: this reads every level of the path back at once. A level that
-      // is not a real directory, or that another user may write to, empties the
-      // queue — no read from a path that could still be swapped, and no fetch
-      // writing through one.
+    } else if (step.kind === "preflight" || step.kind === "verify") {
+      // Before mkdir -p, accept only a safe existing prefix; after it, require
+      // the complete chain. This prevents recursive creation from following an
+      // existing symlink parent and still lets us create missing cache dirs.
       var chain = Holidays.ancestryPaths(Holidays.cacheDir(root.holidayCacheHome))
-      if (!Holidays.chainOk(holidayProc.stdoutText, chain.length, root.holidayEffectiveUid)) {
+      var allowMissingTail = step.kind === "preflight"
+      if (!Holidays.chainOk(holidayProc.stdoutText, chain.length,
+          root.holidayEffectiveUid, allowMissingTail)) {
         root.holidayEffectiveUid = ""
         root.holidaySteps = []
       }
@@ -313,7 +312,7 @@ Item {
       root.holidayStagedPath = ""
       root.abandonHolidayStep(["fetch", "publish"])
     } else if (step.kind === "publish") root.abandonHolidayStep([])
-    else if (step.kind === "uid" || step.kind === "verify") {
+    else if (step.kind === "uid" || step.kind === "preflight" || step.kind === "verify") {
       root.holidayEffectiveUid = ""
       root.holidaySteps = []
     }

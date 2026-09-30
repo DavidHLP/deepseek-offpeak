@@ -72,18 +72,29 @@ function resolveApiKey() {
 function ensureGuardedCacheDir(cacheHome) {
   const dir = Holidays.cacheDir(cacheHome)
   if (dir === "") return false
-  try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  } catch (e) {
-    // The chain below is what decides; a directory this could not create is one
-    // the check will not accept either.
-  }
   const paths = Holidays.ancestryPaths(dir)
   if (paths.length === 0) return false
   try {
+    const effectiveUid = process.geteuid()
+    // Validate each existing component before recursive mkdir can follow a link.
+    for (let i = 0; i < paths.length; i++) {
+      let stat
+      try {
+        stat = fs.lstatSync(paths[i])
+      } catch (e) {
+        if (i > 0 && e.code === "ENOENT") break
+        return false
+      }
+      const mode = stat.mode.toString(16)
+      const trusted = i === paths.length - 1
+        ? Holidays.guardOk(mode, stat.uid, effectiveUid)
+        : Holidays.ancestorOk(mode, stat.uid, effectiveUid)
+      if (!trusted) return false
+    }
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     const stats = paths.map((entry) => fs.lstatSync(entry))
     const statText = stats.map((stat) => String(stat.uid) + ":" + stat.mode.toString(16)).join("\n")
-    return Holidays.chainOk(statText, paths.length, process.geteuid())
+    return Holidays.chainOk(statText, paths.length, effectiveUid)
   } catch (e) {
     return false
   }

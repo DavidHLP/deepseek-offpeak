@@ -261,8 +261,12 @@ check("the chain binds every owner and mode to the effective UID", () => {
     "a partial stat chain is not a final verification")
   assert.strictEqual(H.chainOk(existingParents, paths.length, uid, true), true,
     "trusted existing parents allow creation of the missing cache leaf")
-  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length, uid, true), false,
-    "a missing leading prefix is not an existing path chain")
+  const foreignParent = ok.slice(0, -1)
+  foreignParent[2] = "1001:" + normal
+  assert.strictEqual(H.chainOk(foreignParent.join("\n"), paths.length, uid, true), false,
+    "an untrusted existing parent fails the preflight")
+  assert.strictEqual(H.chainOk(ok.slice(0, 2).join("\n"), paths.length, uid, true), true,
+    "multiple missing trailing directories may still be created under trusted parents")
   const symlinkParent = ok.slice(0, -1)
   symlinkParent[1] = uid + ":" + (0o120777).toString(16)
   assert.strictEqual(H.chainOk(symlinkParent.join("\n"), paths.length, uid, true), false,

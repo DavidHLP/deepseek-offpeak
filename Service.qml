@@ -101,8 +101,8 @@ Item {
   // notification decision waits for it (see tick).
   property bool holidayCycleDone: false
 
-  // The read-and-refresh queue, one step at a time. The cycle opens with the
-  // guard: the cache directory is created, then the whole path down to it is
+  // The read-and-refresh queue, one step at a time. The cycle first records the
+  // effective UID, then creates the cache directory and verifies its whole path.
   // read back at once and judged level by level, and a verdict that does not
   // pass drops every step behind it — no read from a path that could still be
   // swapped, no fetch writing through one. Two years are then read before
@@ -118,10 +118,11 @@ Item {
   // Identifies the step in flight, so a callback scheduled for one step can tell
   // that the next one has already started and leave it alone.
   property int holidayStepSeq: 0
+  property string holidayEffectiveUid: ""
 
   function holidayStepQueue() {
     var year = root.holidayYear
-    var steps = [{ kind: "prepare" }, { kind: "verify" },
+    var steps = [{ kind: "uid" }, { kind: "prepare" }, { kind: "verify" },
       { kind: "read", year: year }, { kind: "read", year: year + 1 },
       { kind: "stage", year: year }, { kind: "fetch", year: year }, { kind: "publish", year: year },
       { kind: "read", year: year }]
@@ -136,6 +137,7 @@ Item {
   }
 
   function holidayStepSpec(step) {
+    if (step.kind === "uid") return Holidays.uidSpec()
     if (step.kind === "prepare") return Holidays.prepareSpec(root.holidayCacheHome)
     if (step.kind === "verify") return Holidays.verifySpec(root.holidayCacheHome)
     if (step.kind === "stage") return Holidays.stageSpec(root.holidayCacheHome, step.year)
@@ -177,6 +179,7 @@ Item {
     }
     if (root.holidayStepActive) return false
     root.holidayStagedPath = ""
+    root.holidayEffectiveUid = ""
     root.holidaySteps = root.holidayStepQueue()
     return root.startHolidayStep()
   }
@@ -207,21 +210,28 @@ Item {
     return true
   }
 
-  // A step is done when it has reported an exit code, and — for a read or a
-  // stage, both of which put something on stdout that the next step needs —
-  // when its stdout is complete: Quickshell emits the collector's
-  // streamFinished before `exited`, so waiting for both is what keeps the next
-  // step from starting on half-collected text.
+  // A step that consumes stdout waits for both the exit code and the collector:
+  // streamFinished may arrive before or after the exit signal, so requiring both
+  // keeps the next step from starting on partial output.
   function finishHolidayStep() {
     if (!root.holidayStepActive) return false
     if (holidayProc.exitCode === -1) return false
     var kind = root.holidayStep.kind
-    if ((kind === "read" || kind === "stage") && !holidayProc.stdoutDone) return false
+    if ((kind === "uid" || kind === "verify" || kind === "read" || kind === "stage")
+        && !holidayProc.stdoutDone) return false
 
     var step = root.holidayStep
     holidayWatchdog.stop()
     root.holidayStepActive = false
-    if (step.kind === "read") {
+    if (step.kind === "uid") {
+      var uid = String(holidayProc.stdoutText).trim()
+      if (holidayProc.exitCode !== 0 || !/^\d+$/.test(uid)) {
+        root.holidayEffectiveUid = ""
+        root.holidaySteps = []
+      } else {
+        root.holidayEffectiveUid = uid
+      }
+    } else if (step.kind === "read") {
       root.adoptHolidayCache(holidayProc.exitCode, holidayProc.stdoutText, step.year)
     } else if (step.kind === "verify") {
       // The gate on the whole cycle. `mkdir -p` behind this happily succeeds
@@ -231,7 +241,10 @@ Item {
       // queue — no read from a path that could still be swapped, and no fetch
       // writing through one.
       var chain = Holidays.ancestryPaths(Holidays.cacheDir(root.holidayCacheHome))
-      if (!Holidays.chainOk(holidayProc.stdoutText, chain.length)) root.holidaySteps = []
+      if (!Holidays.chainOk(holidayProc.stdoutText, chain.length, root.holidayEffectiveUid)) {
+        root.holidayEffectiveUid = ""
+        root.holidaySteps = []
+      }
     } else if (step.kind === "stage") {
       // The exclusive creation is the step that can fail — a template mktemp
       // would not take, a directory that stopped being writable. With no
@@ -300,7 +313,10 @@ Item {
       root.holidayStagedPath = ""
       root.abandonHolidayStep(["fetch", "publish"])
     } else if (step.kind === "publish") root.abandonHolidayStep([])
-    else if (step.kind === "verify") root.holidaySteps = []
+    else if (step.kind === "uid" || step.kind === "verify") {
+      root.holidayEffectiveUid = ""
+      root.holidaySteps = []
+    }
     return root.startHolidayStep()
   }
 

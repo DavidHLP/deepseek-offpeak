@@ -82,17 +82,8 @@ function ensureGuardedCacheDir(cacheHome) {
   if (paths.length === 0) return false
   try {
     const stats = paths.map((entry) => fs.lstatSync(entry))
-    const cacheOwner = stats[stats.length - 1].uid
-    for (let i = 0; i < stats.length; i++) {
-      // lstat, not stat: the mode and owner of each name itself, never of
-      // whatever it might point at, so a symlink cannot borrow an identity.
-      const mode = stats[i].mode.toString(16)
-      const ok = i === stats.length - 1
-        ? Holidays.guardOk(mode)
-        : Holidays.ancestorOk(mode, stats[i].uid, cacheOwner)
-      if (!ok) return false
-    }
-    return true
+    const statText = stats.map((stat) => String(stat.uid) + ":" + stat.mode.toString(16)).join("\n")
+    return Holidays.chainOk(statText, paths.length, process.geteuid())
   } catch (e) {
     return false
   }

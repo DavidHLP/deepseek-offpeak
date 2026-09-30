@@ -9,6 +9,10 @@
 
 const assert = require("assert")
 const H = require("../lib/Holidays.js")
+const childProcess = require("child_process")
+const fs = require("fs")
+const os = require("os")
+const path = require("path")
 
 let checks = 0
 function check(name, fn) {
@@ -252,9 +256,17 @@ check("the chain binds every owner and mode to the effective UID", () => {
     "a privileged process must not trust a cache owned by its caller")
   assert.strictEqual(H.chainOk("x:" + normal + "\n" + ok.slice(1).join("\n"), paths.length, uid), false,
     "malformed owner output fails closed")
-  assert.strictEqual(H.chainOk(ok.slice(0, 4).join("\n"), paths.length, uid), false,
-    "a level stat could not read: one line short, nothing may be written through it")
-  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length, uid), false, "still short")
+  const existingParents = ok.slice(0, -1).join("\n")
+  assert.strictEqual(H.chainOk(existingParents, paths.length, uid), false,
+    "a partial stat chain is not a final verification")
+  assert.strictEqual(H.chainOk(existingParents, paths.length, uid, true), true,
+    "trusted existing parents allow creation of the missing cache leaf")
+  assert.strictEqual(H.chainOk(ok.slice(1).join("\n"), paths.length, uid, true), false,
+    "a missing leading prefix is not an existing path chain")
+  const symlinkParent = ok.slice(0, -1)
+  symlinkParent[1] = uid + ":" + (0o120777).toString(16)
+  assert.strictEqual(H.chainOk(symlinkParent.join("\n"), paths.length, uid, true), false,
+    "an existing symlink prefix must be rejected before directory creation")
   assert.strictEqual(H.chainOk(root + "\n" + root + "\n" + owned + "\n" + owned + "\n" + owned,
     paths.length, uid), false, "the last entry is the cache directory itself: 0700 or not at all")
   assert.strictEqual(H.chainOk("", paths.length, uid), false)
@@ -329,6 +341,35 @@ check("the read stops one byte past the ceiling", () => {
   assert.strictEqual(spec.command[3], "--", "so a path beginning with a dash is a path")
   assert.strictEqual(spec.command[4], spec.path)
   assert.strictEqual(spec.path, H.cachePath("/tmp/cache", 2026))
+})
+
+check("CLI does not create cache content through a symlink parent", () => {
+  const temp = fs.mkdtempSync(path.join(os.homedir(), ".deepseek-offpeak-test-"))
+  try {
+    const target = path.join(temp, "target")
+    const cacheHome = path.join(temp, "cache-home")
+    fs.mkdirSync(target)
+    fs.symlinkSync(target, cacheHome)
+    const cli = path.resolve(__dirname, "../bin/deepseek-offpeak")
+    const result = childProcess.spawnSync(process.execPath, [cli, "status"], {
+      cwd: temp,
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        HOME: temp,
+        XDG_CONFIG_HOME: path.join(temp, "config"),
+        XDG_CACHE_HOME: cacheHome,
+        DEEPSEEK_API_KEY: "",
+        PATH: process.env.PATH
+      }
+    })
+    assert.strictEqual(result.error, undefined, String(result.error || ""))
+    assert.strictEqual(result.status, 0, result.stderr || "CLI status should remain available")
+    assert.strictEqual(fs.existsSync(path.join(target, "deepseek-offpeak")), false,
+      "reject the symlink parent before creating the cache leaf at its target")
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
 })
 
 console.log(`holidays: ${checks} checks passed`)

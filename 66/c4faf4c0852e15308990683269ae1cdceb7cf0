@@ -1,0 +1,36 @@
+scripts/preview/Fixtures.js
+  s_5bb18178043d05::t_6d5d7e074d4aa7 3-6
+  s_5bb18178043d05::t_58d1677be92723 1-2,7-11
+tests/preview.test.js
+  s_5bb18178043d05::t_6d5d7e074d4aa7 1-11,13-14,16-31
+  s_5bb18178043d05::t_a6208e446ba640 12,15
+scripts/preview/README.md
+  s_5bb18178043d05::t_a6208e446ba640 1-58
+.github/workflows/ci.yml
+  s_5bb18178043d05::t_a6208e446ba640 45
+scripts/preview/shell.qml
+  s_5bb18178043d05::t_6d5d7e074d4aa7 92
+  s_5bb18178043d05::t_4877dd473e4735 1-91,93-118
+.gitignore
+  s_5bb18178043d05::t_e81177f1b94656 32-37
+UI-VALIDATION.md
+  s_5bb18178043d05::t_e07ce69b4b9e67 64-68
+scripts/preview/run.sh
+  s_5bb18178043d05::t_88007116e324e9 1-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66c4faf4c0852e15308990683269ae1cdceb7cf0",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+Panel.qml
+  s_5bb18178043d05::t_b120677e81267b 675-677
+  s_5bb18178043d05::t_3748036f6d91ea 35,484
+UI-VALIDATION.md
+  s_5bb18178043d05::t_31dafb66d69da2 30-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e3214e2a4d1091b779da78bcfb58dd011a756c6",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}

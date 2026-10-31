@@ -48,4 +48,27 @@ assert.equal(calls, 1)
 root.service = null
 activate()
 assert.equal(calls, 1)
+// Execute actual scrolling code against measured-layout stand-ins.
+const reveal = source.match(/function revealCursor\(\) \{[\s\S]*?\n  \}/)
+assert.ok(reveal)
+const viewport = { contentY: 0, height: 100, contentHeight: 600 }
+const targets = [20, 250, 500].map(y => ({ height: 40, mapToItem() { return { y } } }))
+const navigation = { cursor: 2, scrollBy(delta) {
+  viewport.contentY = Math.max(0, Math.min(viewport.contentHeight - viewport.height, viewport.contentY + delta))
+} }
+const revealSelected = require('node:vm').runInNewContext(reveal[0] + '; revealCursor;', {
+  root: navigation, panelScroll: viewport, panelColumn: {},
+  timelineAction: targets[0], balanceAction: targets[1], notificationAction: targets[2]
+})
+revealSelected()
+assert.equal(viewport.contentY, 440, 'notification row comes into view')
+revealSelected()
+assert.equal(viewport.contentY, 440, 'already visible row does not jump')
+navigation.cursor = 0
+revealSelected()
+assert.equal(viewport.contentY, 20, 'wrapping back reveals the first action')
+viewport.contentY = 0
+viewport.height = 600
+revealSelected()
+assert.equal(viewport.contentY, 0, 'no scroll when the panel fits')
 console.log('preview: fixture states and switch boundary passed')

@@ -58,3 +58,8 @@ quickshell ipc -p /tmp/deepseek-preview.XXXXXXXX/shell.qml call preview theme li
 
 `node tests/preview.test.js` 是 CI 的纯数据检查；它验证模拟余额可被现有解析器接受，
 并固定切换前后一秒的时间关系，不代表鼠标、键盘或桌面渲染验收通过。
+
+键盘补充检查：展开时间轴后，连续按 ↓ 选择余额、通知，再继续按 ↓ 循环回时间轴。
+被选择的整行应自动进入可见区域，不再需要先用鼠标滚动；已可见的行不应跳动。
+loading/cached 时余额操作行不可用；service 时余额与通知均不可用。
+如使用屏幕阅读器，另核对时间轴的展开/折叠及通知 on/off/unavailable 描述。

@@ -48,6 +48,7 @@ Panel {
     root.contentForeground.b, 0.12)
 
   property bool timelineExpanded: false
+  onTimelineExpandedChanged: Qt.callLater(root.revealCursor)
 
   // Keyboard cursor over the panel's three controls, so a summoned panel is
   // usable without the mouse. Hovering a row moves the cursor to it, so there
@@ -68,6 +69,16 @@ Panel {
   function moveCursor(dy) {
     if (dy === 0) return
     root.cursor = (root.cursor + dy + root.cursorCount) % root.cursorCount
+    Qt.callLater(root.revealCursor)
+  }
+
+  function revealCursor() {
+    var target = [timelineAction, balanceAction, notificationAction][root.cursor]
+    var top = target.mapToItem(panelColumn, 0, 0).y
+    var bottom = top + target.height
+    if (top < panelScroll.contentY) root.scrollBy(top - panelScroll.contentY)
+    else if (bottom > panelScroll.contentY + panelScroll.height)
+      root.scrollBy(bottom - panelScroll.contentY - panelScroll.height)
   }
 
   function activateCursor() {
@@ -204,6 +215,11 @@ Panel {
 
     Accessible.role: Accessible.Button
     Accessible.name: row.label + (row.hint ? ", " + row.hint : "")
+      + (row.showChevron ? (row.expanded ? ", expanded" : ", collapsed") : "")
+      + (row.cursorIndex === 2 ? (root.service
+        ? (root.service.notificationsEnabled ? ", on" : ", off") : ", unavailable") : "")
+    enabled: row.cursorIndex === 0 || (root.service !== null
+      && (row.cursorIndex !== 1 || !root.balanceLoading))
     Accessible.onPressAction: row.activated()
 
     signal activated()
@@ -327,6 +343,7 @@ Panel {
 
         Column {
           id: panelColumn
+          onPositioningComplete: if (root.opened) Qt.callLater(root.revealCursor)
           width: panelScroll.width
           spacing: Style.space(10)
 
@@ -506,6 +523,7 @@ Panel {
             spacing: Style.space(6)
 
             ActionRow {
+              id: timelineAction
               cursorIndex: 0
               label: "Day timeline"
               hint: root.timelineExpanded ? "hide" : "show"
@@ -693,9 +711,10 @@ Panel {
               }
 
               ActionRow {
+                id: balanceAction
                 cursorIndex: 1
                 label: "Balance"
-                hint: root.balanceLoading ? "updating" : "refresh"
+                hint: !root.service ? "unavailable" : (root.balanceLoading ? "updating" : "refresh")
                 onActivated: root.refreshBalance()
 
                 trailingControl: Component {
@@ -753,6 +772,7 @@ Panel {
             spacing: Style.space(4)
 
             ActionRow {
+              id: notificationAction
               cursorIndex: 2
               label: "Notify when off-peak starts"
               onActivated: if (root.service) root.service.setNotificationsEnabled(!root.service.notificationsEnabled)

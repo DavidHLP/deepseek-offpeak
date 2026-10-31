@@ -89,3 +89,9 @@ Quotatank-inspired reliability follow-up:
 
 Design ideas only were borrowed from Quotatank's old-reading and recovery
 feedback; no reference implementation or resource was copied.
+
+Keyboard/accessibility follow-up: see REFERENCE-REVIEW.md for the comparison,
+layout-timing failure and host recheck. Keyboard action selection now scrolls into
+view after Column positioning, and row names expose expansion/notification state;
+busy/absent-service controls are disabled. Physical key and screen-reader delivery
+remain manual checks; the isolated probe exercised actual QML methods/properties.

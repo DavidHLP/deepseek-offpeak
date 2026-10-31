@@ -32,7 +32,7 @@ Panel {
   readonly property color phaseColor: root.peak ? Commons.Color.urgent : Commons.Color.accent
 
   readonly property var balances: service ? service.balanceBalances : []
-  readonly property string balanceMessage: service ? service.balanceMessage : ""
+  readonly property string balanceMessage: service ? service.balanceMessage : "Waiting for the DeepSeek service…"
   readonly property bool balanceBusy: service ? service.balanceBusy : false
   readonly property bool balanceLoading: service ? service.balanceStatus === "loading" || service.keyReadBusy : false
 
@@ -481,7 +481,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.service ? "Holiday coverage: " + root.service.holidayYearsLabel
+            text: root.service ? "Holiday coverage: " + (root.service.holidayYearsLabel || "none")
               + " · Cached / built-in dates. Missing years use weekdays only; freshness is not verified." : "Loading local schedule…"
             textFormat: Text.PlainText
             color: root.dim
@@ -672,7 +672,9 @@ Panel {
               Text {
                 width: parent.width
                 text: root.service && root.service.balanceUpdatedLabel !== ""
-                  ? "Last successful reading · " + root.service.balanceUpdatedLabel : "Optional · no key required for schedule"
+                  ? "Last successful reading · " + root.service.balanceUpdatedLabel
+                    + (root.balanceLoading && root.balances.length > 0 ? " · Previous data while updating" : "")
+                  : "Optional · no key required for schedule"
                 textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.contentFontFamily

@@ -1,5 +1,11 @@
 # DeepSeek Off-Peak
 
+![DeepSeek Off-Peak — Dark and Light panels with simulated data](preview.png)
+
+<sub>Dark / Light: actual isolated QML captures with synthetic data, not live account readings.
+The capture uses a taller preview viewport to show the complete panel; normal panels scroll.
+[Original screenshots and capture notes](docs/screenshots/README.md).</sub>
+
 An [Omarchy](https://omarchy.org) plugin that shows DeepSeek's peak/off-peak
 billing state, counts down to the next change, optionally reads your account
 balance, and notifies you when off-peak starts.
@@ -155,6 +161,15 @@ require("hypr.autostart")
 Then `hyprctl reload` and `omarchy restart shell`. (`hyprctl setenv` does not
 exist in every Hyprland build — check `hyprctl setenv FOO bar` before relying on
 it. `~/.config/environment.d/` works too, but only after a fresh login.)
+
+The panel shows the balance reading's full local date and age. A reading at least
+10 minutes old (two normal polling intervals) is marked **Old reading**; a timestamp more than one
+second ahead of the sampled service clock is flagged as a clock mismatch. Fresh
+readings within that one-second sampling interval are shown as just now. This is a display warning, not a change
+to the reported amount or billing schedule. Failed queries still clear amounts
+as before, and the panel suggests a next action without exposing request details.
+The footer lists the keyboard shortcuts; balance refresh is disabled while a key
+read or balance query is pending for mouse and keyboard activation alike.
 
 Money stays a string end to end. The API sends decimals like `"110.00"`, and
 parsing them into floats only to re-print them invents rounding.

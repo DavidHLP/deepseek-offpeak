@@ -42,6 +42,7 @@ jobs:
           node tests/holidays.test.js
           node tests/balance.test.js
           node tests/status.test.js
+          node tests/preview.test.js
       - name: Check CLI help is offline-safe
         run: |
           set -euo pipefail

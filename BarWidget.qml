@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 import "lib/Schedule.js" as Schedule
 
 // Bar widget: DeepSeek's current pricing state and the time left in it.
@@ -31,7 +32,7 @@ BarWidget {
   // countdown drops to its largest unit.
   readonly property var verticalLines: {
     if (!root.vertical) return []
-    return [root.peak ? "Peak" : "Off", Schedule.formatCompact(root.remainingSeconds)]
+    return root.service ? [root.peak ? "Peak" : "Off", Schedule.formatCompact(root.remainingSeconds)] : ["…"]
   }
 
   readonly property string tooltip: service
@@ -142,7 +143,7 @@ BarWidget {
     tooltipText: root.tooltip
     // Keep the peak label's warning color alongside the DeepSeek logo.
     active: root.peak
-    activeColor: root.bar ? root.bar.urgent : Color.urgent
+    activeColor: root.bar ? root.bar.urgent : Commons.Color.urgent
     onPressed: function(b) {
       if (b === Qt.MiddleButton) {
         if (root.service) root.service.refresh()
@@ -167,8 +168,17 @@ BarWidget {
       }
 
       Text {
-        text: root.label
+        text: root.phaseLabel
+        font.bold: true
         color: root.peak ? button.activeColor : button.foreground
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+        renderType: Text.NativeRendering
+      }
+      Text {
+        visible: root.remaining !== ""
+        text: root.remaining
+        color: button.foreground
         font.family: button.fontFamily
         font.pixelSize: button.fontSize
         renderType: Text.NativeRendering

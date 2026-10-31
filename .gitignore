@@ -29,3 +29,15 @@
 !/scripts/ci/
 !/scripts/ci/validate-manifest.js
 !/scripts/ci/validate-qml.sh
+!/scripts/preview/
+!/scripts/preview/run.sh
+!/scripts/preview/shell.qml
+!/scripts/preview/Fixtures.js
+!/scripts/preview/README.md
+!/tests/preview.test.js
+!/REFERENCE-REVIEW.md
+!/docs/
+!/docs/screenshots/
+!/docs/screenshots/dark.png
+!/docs/screenshots/light.png
+!/docs/screenshots/README.md

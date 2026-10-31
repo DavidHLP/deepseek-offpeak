@@ -95,3 +95,26 @@ layout-timing failure and host recheck. Keyboard action selection now scrolls in
 view after Column positioning, and row names expose expansion/notification state;
 busy/absent-service controls are disabled. Physical key and screen-reader delivery
 remain manual checks; the isolated probe exercised actual QML methods/properties.
+
+PR review corrections (comments 4431599802 and 4431599805):
+
+- readingInfo now tolerates up to 1000 ms between the sampled service clock
+  and an immediately completed balance result. Negative ages within that
+  interval render just now; a lead of 1001 ms still flags a clock mismatch.
+  Regression checks include 1, 100, 999 and 1000 ms leads, the real rollback
+  boundary, and the existing ten-minute old-reading boundary. The new sampling
+  cases failed on the reviewed code and pass with the correction.
+- Removed the unconditional positioningComplete reveal. Only explicit keyboard
+  navigation or timeline expansion schedules a one-shot reveal. Inner timeline
+  and balance sections are laid out before the outer panel, rather than relying
+  on repeated event-loop delays. Scrolling, Flickable movement or closing can
+  cancel the request. Synthetic checks cover reveal, cancellation, closing and
+  a later background layout with no pending request.
+- A temporary isolated actual QML probe used a 328-pixel viewport and synthetic
+  data. The reviewed Panel.qml moved a manually positioned viewport from 300
+  to 254 after a balance-state update. The fixed panel kept it at 300, preserved
+  an explicit subsequent scroll to 310, and cancelled pending reveal when a
+  Flickable movement started. Expanded keyboard navigation also kept the
+  notification visible (top 648, height 38, contentY 358). The final probe passed
+  twice, including after replaying the original failure. This exercises actual
+  QML layout/functions/signals; it is not physical wheel/key acceptance.

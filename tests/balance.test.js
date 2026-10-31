@@ -433,7 +433,12 @@ check("reading age distinguishes missing, old, future and boundary timestamps", 
   assert.deepStrictEqual(B.readingInfo(sample, 1000000), { label: "just now", old: false })
   assert.deepStrictEqual(B.readingInfo(sample, 1599999), { label: "9m ago", old: false })
   assert.deepStrictEqual(B.readingInfo(sample, 1600000), { label: "10m ago", old: true })
-  assert.deepStrictEqual(B.readingInfo(sample, 999999), { label: "timestamp ahead of local clock", old: true })
+  for (const lead of [1, 100, 999, 1000]) {
+    assert.deepStrictEqual(B.readingInfo(sample, sample.updatedAtMs - lead),
+      { label: "just now", old: false }, "normal one-second clock sampling lag")
+  }
+  assert.deepStrictEqual(B.readingInfo(sample, sample.updatedAtMs - 1001),
+    { label: "timestamp ahead of local clock", old: true }, "larger clock rollback still warned")
   assert.strictEqual(B.readingInfo(sample, 1000000 + 3660000).label, "1h 1m ago")
   assert.strictEqual(B.readingInfo(sample, 1000000 + 86400000).label, "1d ago")
   assert.deepStrictEqual(sample, { updatedAtMs: 1000000 }, "presentation must not mutate account state")

@@ -71,4 +71,47 @@ viewport.contentY = 0
 viewport.height = 600
 revealSelected()
 assert.equal(viewport.contentY, 0, 'no scroll when the panel fits')
+// Deferred reveals are one-shot; manual scrolling cancels a queued reveal.
+const deferred = []
+let layouts = 0
+const actions = ['moveCursor', 'requestCursorReveal', 'flushCursorReveal', 'scrollBy'].map(name => {
+  const match = source.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}'))
+  assert.ok(match, name)
+  return match[0]
+})
+Object.assign(navigation, { cursor: 1, cursorCount: 3, cursorRevealPending: false, opened: true,
+  revealCursor: revealSelected })
+Object.assign(navigation, require('node:vm').runInNewContext(actions.join('\n') +
+  '; ({moveCursor, requestCursorReveal, flushCursorReveal, scrollBy});', {
+    root: navigation, panelScroll: viewport,
+    panelColumn: { forceLayout() { layouts++ } },
+    timelineDetails: { forceLayout() { layouts++ } },
+    timelineSection: { forceLayout() { layouts++ } },
+    balanceContent: { forceLayout() { layouts++ } },
+    Qt: { callLater(fn) { deferred.push(fn) } }
+  }))
+const drain = () => { while (deferred.length) deferred.shift()() }
+viewport.height = 100
+viewport.contentY = 0
+navigation.moveCursor(1)
+assert.equal(navigation.cursorRevealPending, true)
+drain()
+assert.equal(viewport.contentY, 440, 'deferred keyboard selection revealed')
+assert.equal(navigation.cursorRevealPending, false)
+assert.equal(layouts, 4)
+// A later layout/data update must not move a viewport manually scrolled down.
+navigation.cursor = 0
+navigation.scrollBy(-140)
+assert.equal(viewport.contentY, 300)
+navigation.flushCursorReveal()
+assert.equal(viewport.contentY, 300, 'background layout has no pending reveal')
+navigation.requestCursorReveal()
+navigation.scrollBy(10)
+drain()
+assert.equal(viewport.contentY, 310, 'manual scroll overrides queued navigation')
+navigation.requestCursorReveal()
+navigation.opened = false
+drain()
+assert.equal(navigation.cursorRevealPending, false)
+assert.equal(viewport.contentY, 310, 'closing cancels queued navigation')
 console.log('preview: fixture states and switch boundary passed')

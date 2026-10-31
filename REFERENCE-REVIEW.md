@@ -31,7 +31,7 @@ are MIT. No reference code or assets were copied.
 2. An isolated real Omarchy/Wayland panel with synthetic service was probed using
    a temporary copy of Panel.qml with test-only aliases. Expanding the timeline
    initially failed: notification top 648, height 38, viewport 528, contentY 21.
-   Re-running after adding the Column positioningComplete hook passed: contentY
+   The earlier positioningComplete-based fix passed that probe: contentY
    158, full notification visible; wrapping to timeline also reported visible.
    No keys or network requests were involved. The probe called the actual
    navigation functions, not physical key input.
@@ -48,3 +48,9 @@ No actual paid request, live cache change, notification delivery, production
 keyboard/reader acceptance or full installed-theme cycle was performed. Preview
 and probe processes/temp directories were cleaned; production shell retained.
 The host portal registration warning remains unrelated to these UI changes.
+
+The earlier global positioningComplete hook was superseded during PR review:
+explicit navigation/expansion now queues one cancellable reveal, settles inner
+sections before the outer Column, and consumes the request. Background data
+layouts no longer scroll to a stale cursor. See UI-VALIDATION.md for the
+manual-scroll regression and before/after host probe.

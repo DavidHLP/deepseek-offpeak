@@ -48,7 +48,9 @@ Panel {
     root.contentForeground.b, 0.12)
 
   property bool timelineExpanded: false
-  onTimelineExpandedChanged: Qt.callLater(root.revealCursor)
+  onTimelineExpandedChanged: root.requestCursorReveal()
+  property bool cursorRevealPending: false
+  onOpenedChanged: if (!root.opened) root.cursorRevealPending = false
 
   // Keyboard cursor over the panel's three controls, so a summoned panel is
   // usable without the mouse. Hovering a row moves the cursor to it, so there
@@ -69,7 +71,24 @@ Panel {
   function moveCursor(dy) {
     if (dy === 0) return
     root.cursor = (root.cursor + dy + root.cursorCount) % root.cursorCount
-    Qt.callLater(root.revealCursor)
+    root.requestCursorReveal()
+  }
+
+  function requestCursorReveal() {
+    root.cursorRevealPending = true
+    Qt.callLater(root.flushCursorReveal)
+  }
+
+  function flushCursorReveal() {
+    if (!root.cursorRevealPending) return
+    root.cursorRevealPending = false
+    if (!root.opened) return
+    // Settle inner sections before positioning the selected action in the panel.
+    timelineDetails.forceLayout()
+    timelineSection.forceLayout()
+    balanceContent.forceLayout()
+    panelColumn.forceLayout()
+    root.revealCursor()
   }
 
   function revealCursor() {
@@ -88,6 +107,7 @@ Panel {
   }
 
   function scrollBy(dy) {
+    root.cursorRevealPending = false
     if (!panelScroll || panelScroll.contentHeight <= panelScroll.height) return
     panelScroll.contentY = Math.max(0, Math.min(panelScroll.contentHeight - panelScroll.height, panelScroll.contentY + dy))
   }
@@ -340,10 +360,10 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
+        onMovementStarted: root.cursorRevealPending = false
 
         Column {
           id: panelColumn
-          onPositioningComplete: if (root.opened) Qt.callLater(root.revealCursor)
           width: panelScroll.width
           spacing: Style.space(10)
 
@@ -519,6 +539,7 @@ Panel {
 
           // ---- The whole day at a glance --------------------------------
           Column {
+            id: timelineSection
             width: parent.width
             spacing: Style.space(6)
 
@@ -618,6 +639,7 @@ Panel {
             }
 
             Column {
+              id: timelineDetails
               width: parent.width
               visible: root.timelineExpanded
               spacing: Style.space(2)

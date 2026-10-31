@@ -22,7 +22,8 @@ scripts/preview/run.sh
 - **Theme**：循环深色/浅色预览配色；这不是完整已安装主题切换。
 - **State**：循环 balance（正常余额）、loading（首次加载）、cached（刷新保留旧余额）、
   missing（无密钥）、network（网络失败）、unavailable（账号不可用）、empty（无余额条目）、
-  long（长金额）、holidays（无节假日覆盖）、service（服务缺失）。
+  long（长金额）、holidays（无节假日覆盖）、service（服务缺失）、old（11 分钟旧余额）、
+  clock（读取时间领先本地时钟）、rejected（401）、limited（429）、keyfile（密钥文件格式错误）。
 - **Time**：循环峰时、谷时、周末、切换前一秒、边界时刻。固定日期按 UTC 计算，
   本地时间按桌面时区显示；时钟不自行推进，不会发送通知。
 - 状态切换按钮在面板外，点击会关闭面板；再次点击 DeepSeek 打开即可。
@@ -44,8 +45,9 @@ quickshell ipc -p /tmp/deepseek-preview.XXXXXXXX/shell.qml call preview theme li
 1. 左键打开/再次点击关闭，点外部关闭；中键只刷新一次，不意外打开。
 2. 面板打开后用 ↑/↓ 或 j/k 移动，Enter/空格激活时间轴、余额刷新和通知；
    E 展开，R 刷新，Esc 关闭。←/→ 或 h/l 滚动，鼠标滚轮可到达底部通知说明。
-3. 深浅配色分别检查所有 State：数字不溢出、错误可读、无密钥不显示金额；
-   cached 同时显示旧数据提示和正在更新，无覆盖年份显示 none，服务缺失显示等待。
+3. 深浅配色分别检查所有 State（共 15 种）：数字不溢出、错误可读、无密钥不显示金额；
+   cached 同时显示旧数据提示和正在更新，old 显示完整日期/年龄且标明旧读数；
+   clock 提示时钟不一致；rejected/limited/network 给出相应恢复建议。无覆盖年份显示 none，服务缺失显示等待。
 4. Time 从切换前一秒进入边界时刻：状态栏、主倒计时和时间轴应同步变化。
    核对显示的时区；固定模拟时间不能替代真实定时器/通知验收。
 5. 再以 1.25 倍缩放运行，检查文本、卡片和底部滚动区域。

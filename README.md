@@ -156,6 +156,14 @@ Then `hyprctl reload` and `omarchy restart shell`. (`hyprctl setenv` does not
 exist in every Hyprland build — check `hyprctl setenv FOO bar` before relying on
 it. `~/.config/environment.d/` works too, but only after a fresh login.)
 
+The panel shows the balance reading's full local date and age. A reading at least
+10 minutes old (two normal polling intervals) is marked **Old reading**; a future
+timestamp is flagged as a clock mismatch. This is a display warning, not a change
+to the reported amount or billing schedule. Failed queries still clear amounts
+as before, and the panel suggests a next action without exposing request details.
+The footer lists the keyboard shortcuts; balance refresh is disabled while a key
+read or balance query is pending for mouse and keyboard activation alike.
+
 Money stays a string end to end. The API sends decimals like `"110.00"`, and
 parsing them into floats only to re-print them invents rounding.
 

@@ -66,3 +66,26 @@ Repeatable fixture preview is now available via `scripts/preview/run.sh`;
 see [manual acceptance instructions](scripts/preview/README.md). It exposes the
 actual UI with a synthetic service and process-local palettes. Production
 runtime/notification acceptance boundaries above still apply.
+
+Quotatank-inspired reliability follow-up:
+
+- The panel now shows a full local reading date and age; at 10 minutes it marks
+  the reading old (two normal balance polls), and a future timestamp identifies
+  a clock mismatch. No values or shared service/CLI state are rewritten.
+- Error-specific recovery hints cover optional setup, malformed key files,
+  connectivity, 401/403 and 429. No credentials or raw response data are shown.
+- Mouse and keyboard balance activation share one busy/no-service guard;
+  shortcuts are listed in the panel footer. R/middle-click retain full refresh.
+- Pure tests cover the exact age threshold, future/missing timestamps, recovery
+  hints and the actual panel refresh function with busy/absent services.
+  Four existing suites now pass 28 + 27 + 24 + 14 = 93 checks, plus the preview
+  checks. Host QML, manifest, whitespace and JS syntax checks pass.
+- A real isolated Wayland preview loaded the actual panel with synthetic data;
+  old light-palette readings and dark 429 guidance were visually inspected.
+  All added scenarios accepted IPC switching without QML exceptions. This is
+  fixture rendering and action-function validation, not physical input or live
+  API/desktop notification acceptance. Preview stopped and temporary files
+  cleaned after validation; production shell untouched.
+
+Design ideas only were borrowed from Quotatank's old-reading and recovery
+feedback; no reference implementation or resource was copied.

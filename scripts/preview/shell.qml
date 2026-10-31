@@ -47,7 +47,7 @@ ShellRoot {
     property var todayPeakLabels: day.peaks
     property real nowFrac: day.nowFrac
     property string timelineDayLabel: day.dayLabel
-    property var balanceState: Fixtures.balance(root.scenarioName)
+    property var balanceState: Fixtures.balance(root.scenarioName, nowMs)
     property string balanceStatus: balanceState.status
     property var balanceBalances: balanceState.balances
     property string balanceMessage: Balance.describeState(balanceState)

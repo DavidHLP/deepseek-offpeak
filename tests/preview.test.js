@@ -28,4 +28,24 @@ const states = F.times.map(now => S.stateAt(now, H.fallback()))
 assert.deepEqual(states.map(s => s.peak), [true, false, false, true, false])
 assert.equal(states[3].secondsToSwitch, 1)
 assert.equal(F.times[4] - F.times[3], 1000)
+
+assert.equal(B.readingInfo(F.balance('old'), F.times[0]).old, true)
+assert.equal(B.readingInfo(F.balance('clock'), F.times[0]).old, true)
+assert.equal(B.readingInfo(F.balance('balance', F.times[2]), F.times[2]).old, false)
+assert.equal(F.balance('limited').error, 'http_429')
+// Exercise the actual panel action; a busy/no-service click must be a no-op.
+const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../Panel.qml'), 'utf8')
+const refresh = source.match(/function refreshBalance\(\) \{[\s\S]*?\n  \}/)
+assert.ok(refresh, 'find actual panel balance action')
+let calls = 0
+const root = { service: { refreshBalance() { calls++ } }, balanceLoading: true }
+const activate = require('node:vm').runInNewContext(refresh[0] + '; refreshBalance;', { root })
+activate()
+assert.equal(calls, 0)
+root.balanceLoading = false
+activate()
+assert.equal(calls, 1)
+root.service = null
+activate()
+assert.equal(calls, 1)
 console.log('preview: fixture states and switch boundary passed')

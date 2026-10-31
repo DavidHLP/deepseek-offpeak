@@ -1,4 +1,5 @@
 import QtQuick
+import "lib/Balance.js" as Balance
 import qs.Ui
 import qs.Commons
 import qs.Commons as Commons
@@ -33,7 +34,10 @@ Panel {
 
   readonly property var balances: service ? service.balanceBalances : []
   readonly property string balanceMessage: service ? service.balanceMessage : "Waiting for the DeepSeek service…"
-  readonly property bool balanceBusy: service ? service.balanceBusy : false
+  readonly property var balanceReading: Balance.readingInfo(service ? service.balanceState : null,
+    service ? service.nowMs : 0)
+  readonly property string recoveryHint: Balance.recoveryHint(service && service.balanceState
+    ? service.balanceState.error : "")
   readonly property bool balanceLoading: service ? service.balanceStatus === "loading" || service.keyReadBusy : false
 
   // Guarded so the panel renders before the bar injects itself.
@@ -68,13 +72,17 @@ Panel {
 
   function activateCursor() {
     if (root.cursor === 0) root.timelineExpanded = !root.timelineExpanded
-    else if (root.cursor === 1 && root.service) root.service.refreshBalance()
+    else if (root.cursor === 1) root.refreshBalance()
     else if (root.cursor === 2 && root.service) root.service.setNotificationsEnabled(!root.service.notificationsEnabled)
   }
 
   function scrollBy(dy) {
     if (!panelScroll || panelScroll.contentHeight <= panelScroll.height) return
     panelScroll.contentY = Math.max(0, Math.min(panelScroll.contentHeight - panelScroll.height, panelScroll.contentY + dy))
+  }
+
+  function refreshBalance() {
+    if (root.service && !root.balanceLoading) root.service.refreshBalance()
   }
 
   function refreshAll() {
@@ -115,11 +123,11 @@ Panel {
       anchors.right: parent.right
       anchors.top: parent.top
       width: Math.min(implicitWidth, parent.width * 0.8)
-        fontSizeMode: Text.Fit
-        minimumPixelSize: Style.font.caption
-        elide: Text.ElideRight
-        text: String(row.modelData.totalBalance || "0")
-      color: root.contentForeground
+      fontSizeMode: Text.Fit
+      minimumPixelSize: Style.font.caption
+      elide: Text.ElideRight
+      text: String(row.modelData.totalBalance || "0")
+      color: root.balanceReading.old ? root.dim : root.contentForeground
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.body
       font.bold: true
@@ -671,12 +679,14 @@ Panel {
 
               Text {
                 width: parent.width
-                text: root.service && root.service.balanceUpdatedLabel !== ""
-                  ? "Last successful reading · " + root.service.balanceUpdatedLabel
+                text: root.service && root.service.balanceState.updatedAtMs > 0
+                  ? (root.balanceReading.old ? "Old reading · " : "Last reading · ")
+                    + Qt.formatDateTime(new Date(root.service.balanceState.updatedAtMs), "yyyy-MM-dd HH:mm")
+                    + " local · " + root.balanceReading.label
                     + (root.balanceLoading && root.balances.length > 0 ? " · Previous data while updating" : "")
                   : "Optional · no key required for schedule"
                 textFormat: Text.PlainText
-                color: root.dim
+                color: root.balanceReading.old ? Commons.Color.urgent : root.dim
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
@@ -686,7 +696,7 @@ Panel {
                 cursorIndex: 1
                 label: "Balance"
                 hint: root.balanceLoading ? "updating" : "refresh"
-                onActivated: if (root.service) root.service.refreshBalance()
+                onActivated: root.refreshBalance()
 
                 trailingControl: Component {
                   PanelActionButton {
@@ -695,7 +705,7 @@ Panel {
                     foreground: root.contentForeground
                     hasCursor: root.cursor === 1
                     enabled: root.service !== null && !root.balanceLoading
-                    onClicked: if (root.service) root.service.refreshBalance()
+                    onClicked: root.refreshBalance()
                   }
                 }
               }
@@ -717,6 +727,16 @@ Panel {
                 visible: root.balanceLoading || root.balanceMessage !== ""
                 text: root.balanceLoading ? "Updating balance…" : root.balanceMessage
                 color: root.service && root.service.balanceStatus === "error" ? Commons.Color.urgent : root.dim
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+              Text {
+                width: parent.width
+                visible: root.recoveryHint !== ""
+                text: root.recoveryHint
+                textFormat: Text.PlainText
+                color: root.dim
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.WordWrap
@@ -757,6 +777,15 @@ Panel {
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
+          }
+          Text {
+            width: parent.width
+            text: "↑/↓ select · Enter activate · ←/→ scroll · R refresh · E timeline · Esc close"
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
         }
       }

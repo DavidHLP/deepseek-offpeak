@@ -426,4 +426,27 @@ check("an oversized response is invalid_response, not a parse", () => {
   assert.strictEqual(B.fromResponse(0, good + "\n200").ok, true)
 })
 
+check("reading age distinguishes missing, old, future and boundary timestamps", () => {
+  const sample = { updatedAtMs: 1000000 }
+  assert.deepStrictEqual(B.readingInfo(null, 1000000), { label: "", old: false })
+  assert.deepStrictEqual(B.readingInfo(sample, NaN), { label: "", old: false })
+  assert.deepStrictEqual(B.readingInfo(sample, 1000000), { label: "just now", old: false })
+  assert.deepStrictEqual(B.readingInfo(sample, 1599999), { label: "9m ago", old: false })
+  assert.deepStrictEqual(B.readingInfo(sample, 1600000), { label: "10m ago", old: true })
+  assert.deepStrictEqual(B.readingInfo(sample, 999999), { label: "timestamp ahead of local clock", old: true })
+  assert.strictEqual(B.readingInfo(sample, 1000000 + 3660000).label, "1h 1m ago")
+  assert.strictEqual(B.readingInfo(sample, 1000000 + 86400000).label, "1d ago")
+  assert.deepStrictEqual(sample, { updatedAtMs: 1000000 }, "presentation must not mutate account state")
+})
+
+check("recovery hints name safe next actions without guessing an HTTP cause", () => {
+  assert.strictEqual(B.recoveryHint(""), "")
+  assert.match(B.recoveryHint(B.ERROR_NETWORK), /offline.*refresh/)
+  assert.match(B.recoveryHint(B.ERROR_MISSING_API_KEY), /optional.*README/)
+  assert.match(B.recoveryHint(B.ERROR_INVALID_KEY_FILE), /correcting.*refresh/)
+  assert.strictEqual(B.recoveryHint("http_401"), B.recoveryHint("http_403"))
+  assert.match(B.recoveryHint("http_429"), /next automatic.*5 min/)
+  assert.match(B.recoveryHint("http_500"), /If this persists/)
+})
+
 console.log(`balance: ${checks} checks passed`)

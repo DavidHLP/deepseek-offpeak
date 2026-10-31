@@ -1,5 +1,11 @@
 # DeepSeek Off-Peak
 
+![DeepSeek Off-Peak — Dark and Light panels with simulated data](preview.png)
+
+<sub>Dark / Light: actual isolated QML captures with synthetic data, not live account readings.
+The capture uses a taller preview viewport to show the complete panel; normal panels scroll.
+[Original screenshots and capture notes](docs/screenshots/README.md).</sub>
+
 An [Omarchy](https://omarchy.org) plugin that shows DeepSeek's peak/off-peak
 billing state, counts down to the next change, optionally reads your account
 balance, and notifies you when off-peak starts.

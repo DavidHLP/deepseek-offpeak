@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 
 // Popup for the DeepSeek bar widget.
 //
@@ -28,17 +29,17 @@ Panel {
 
   readonly property bool peak: service ? service.peak : false
   readonly property string phaseLabel: service ? service.phaseLabel : "Loading"
-  readonly property color phaseColor: root.peak ? Color.urgent : Color.accent
+  readonly property color phaseColor: root.peak ? Commons.Color.urgent : Commons.Color.accent
 
   readonly property var balances: service ? service.balanceBalances : []
   readonly property string balanceMessage: service ? service.balanceMessage : ""
   readonly property bool balanceBusy: service ? service.balanceBusy : false
-  readonly property bool balanceLoading: service ? service.balanceStatus === "loading" : false
+  readonly property bool balanceLoading: service ? service.balanceStatus === "loading" || service.keyReadBusy : false
 
   // Guarded so the panel renders before the bar injects itself.
-  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
+  readonly property color contentForeground: bar ? bar.foreground : Commons.Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color dim: Qt.darker(root.contentForeground, 1.4)
+  readonly property color dim: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.75)
   readonly property color faint: Qt.rgba(root.contentForeground.r, root.contentForeground.g,
     root.contentForeground.b, 0.12)
 
@@ -113,7 +114,11 @@ Panel {
       textFormat: Text.PlainText
       anchors.right: parent.right
       anchors.top: parent.top
-      text: String(row.modelData.totalBalance || "0")
+      width: Math.min(implicitWidth, parent.width * 0.8)
+        fontSizeMode: Text.Fit
+        minimumPixelSize: Style.font.caption
+        elide: Text.ElideRight
+        text: String(row.modelData.totalBalance || "0")
       color: root.contentForeground
       font.family: root.contentFontFamily
       font.pixelSize: Style.font.body
@@ -189,6 +194,10 @@ Panel {
 
     readonly property bool hot: mouse.containsMouse || root.cursor === row.cursorIndex
 
+    Accessible.role: Accessible.Button
+    Accessible.name: row.label + (row.hint ? ", " + row.hint : "")
+    Accessible.onPressAction: row.activated()
+
     signal activated()
 
     width: parent ? parent.width : 0
@@ -196,9 +205,9 @@ Panel {
     readonly property real rowContentHeight: Math.max(labelText.implicitHeight,
       Math.max(hintText.implicitHeight, Style.space(22))) + Style.space(8) * 2
     radius: Style.cornerRadius
-    color: row.hot ? Style.hoverFillFor(root.contentForeground, Color.accent) : "transparent"
+    color: row.hot ? Style.hoverFillFor(root.contentForeground, Commons.Color.accent) : "transparent"
     borderSpec: row.hot
-      ? Border.controlSpec("hover-cursor", root.contentForeground, Color.accent)
+      ? Border.controlSpec("hover-cursor", root.contentForeground, Commons.Color.accent)
       : Border.none()
 
     MouseArea {
@@ -281,7 +290,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(360))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(560))
 
     PanelKeyCatcher {
@@ -332,112 +341,128 @@ Panel {
             }
           }
 
-          // ---- Time left, and what it is counting down to ---------------
-          Column {
+          BorderSurface {
             width: parent.width
-            spacing: Style.space(2)
-
-            Text {
-              textFormat: Text.PlainText
-              width: parent.width
-              text: root.service ? root.service.remainingClock : "\u2014"
-              color: root.phaseColor
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.displayLarge
-              font.bold: true
-              elide: Text.ElideRight
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              width: parent.width
-              text: root.service ? root.service.nextSwitchLabel.toUpperCase() : ""
-              color: root.dim
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 1.2
-              elide: Text.ElideRight
-            }
-          }
-
-          // The next change in both zones: the timetable is published in UTC,
-          // the day is lived in local time, and the reader should not have to
-          // do the subtraction to know when it lands.
-          Row {
-            width: parent.width
-            spacing: Style.space(14)
-
+            implicitHeight: countdownContent.implicitHeight + contentTopInset + contentBottomInset
+            padding: Style.space(12)
+            radius: Style.cornerRadius
+            color: Style.normalFillFor(root.contentForeground, Commons.Color.accent, Commons.Color.urgent)
+            borderSpec: Border.controlSpec("normal", root.contentForeground, Commons.Color.accent, Commons.Color.urgent)
             Column {
-              width: Math.max(0, (parent.width - Style.space(14)) / 2)
-              spacing: Style.space(1)
-
-              Text {
-                textFormat: Text.PlainText
+              id: countdownContent
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: parent.contentLeftInset
+              spacing: Style.space(8)
+              // ---- Time left, and what it is counting down to ---------------
+              Column {
                 width: parent.width
-                text: "LOCAL"
-                color: root.dim
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 1.2
+                spacing: Style.space(2)
+
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: root.service ? root.service.remainingClock : "\u2014"
+                  fontSizeMode: Text.Fit
+                  minimumPixelSize: Style.font.heading
+                  color: root.phaseColor
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.displayLarge
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: root.service ? root.service.nextSwitchLabel.toUpperCase() : ""
+                  color: root.dim
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 1.2
+                  elide: Text.ElideRight
+                }
               }
 
-              Text {
-                textFormat: Text.PlainText
+              // The next change in both zones: the timetable is published in UTC,
+              // the day is lived in local time, and the reader should not have to
+              // do the subtraction to know when it lands.
+              Row {
                 width: parent.width
-                text: root.service ? root.service.nextSwitchLocal : "\u2014"
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.heading
-                elide: Text.ElideRight
-              }
+                spacing: Style.space(14)
 
-              Text {
-                textFormat: Text.PlainText
-                width: parent.width
-                text: root.service ? root.service.nextSwitchLocalDay : ""
-                color: root.dim
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
-            }
+                Column {
+                  width: Math.max(0, (parent.width - Style.space(14)) / 2)
+                  spacing: Style.space(1)
 
-            Column {
-              width: Math.max(0, (parent.width - Style.space(14)) / 2)
-              spacing: Style.space(1)
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: "LOCAL"
+                    color: root.dim
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    font.letterSpacing: 1.2
+                  }
 
-              Text {
-                textFormat: Text.PlainText
-                width: parent.width
-                text: "UTC"
-                color: root.dim
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 1.2
-              }
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: root.service ? root.service.nextSwitchLocal : "\u2014"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.heading
+                    elide: Text.ElideRight
+                  }
 
-              Text {
-                textFormat: Text.PlainText
-                width: parent.width
-                text: root.service ? root.service.nextSwitchUtc : "\u2014"
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.heading
-                elide: Text.ElideRight
-              }
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: root.service ? root.service.nextSwitchLocalDay : ""
+                    color: root.dim
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
 
-              Text {
-                textFormat: Text.PlainText
-                width: parent.width
-                text: root.service ? root.service.nextSwitchUtcDay : ""
-                color: root.dim
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
+                Column {
+                  width: Math.max(0, (parent.width - Style.space(14)) / 2)
+                  spacing: Style.space(1)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: "UTC"
+                    color: root.dim
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    font.letterSpacing: 1.2
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: root.service ? root.service.nextSwitchUtc : "\u2014"
+                    color: root.contentForeground
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.heading
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: root.service ? root.service.nextSwitchUtcDay : ""
+                    color: root.dim
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
             }
           }
 
@@ -449,6 +474,20 @@ Panel {
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
+          }
+
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.service ? "Holiday coverage: " + root.service.holidayYearsLabel
+              + " · Cached / built-in dates. Missing years use weekdays only; freshness is not verified." : "Loading local schedule…"
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
 
           PanelSeparator { foreground: root.contentForeground }
@@ -482,7 +521,7 @@ Panel {
                   x: Math.round(parent.width * modelData.startFrac)
                   width: Math.max(1, Math.round(parent.width * modelData.endFrac) - x)
                   height: parent.height
-                  color: modelData.peak ? root.phaseColor : root.faint
+                  color: modelData.peak ? Commons.Color.urgent : root.faint
                 }
               }
 
@@ -507,7 +546,7 @@ Panel {
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "\u25a0"
-                color: root.phaseColor
+                color: Commons.Color.urgent
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -615,49 +654,73 @@ Panel {
 
           // ---- Balance. Optional and independent: the schedule above stays
           //      correct when this section cannot load.
-          Column {
+          BorderSurface {
             width: parent.width
-            spacing: Style.space(6)
+            implicitHeight: balanceContent.implicitHeight + contentTopInset + contentBottomInset
+            padding: Style.space(12)
+            radius: Style.cornerRadius
+            color: Style.normalFillFor(root.contentForeground, Commons.Color.accent, Commons.Color.urgent)
+            borderSpec: Border.controlSpec("normal", root.contentForeground, Commons.Color.accent, Commons.Color.urgent)
+            Column {
+              id: balanceContent
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: parent.contentLeftInset
+              spacing: Style.space(6)
 
-            ActionRow {
-              cursorIndex: 1
-              label: "Balance"
-              hint: root.balanceLoading ? "loading" : (root.service ? root.service.balanceUpdatedLabel : "")
-              onActivated: if (root.service) root.service.refreshBalance()
+              Text {
+                width: parent.width
+                text: root.service && root.service.balanceUpdatedLabel !== ""
+                  ? "Last successful reading · " + root.service.balanceUpdatedLabel : "Optional · no key required for schedule"
+                textFormat: Text.PlainText
+                color: root.dim
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
 
-              trailingControl: Component {
-                PanelActionButton {
-                  iconText: "\uF0450"
-                  tooltipText: "Re-read the account balance"
-                  foreground: root.contentForeground
-                  hasCursor: root.cursor === 1
-                  enabled: !root.balanceLoading
-                  onClicked: if (root.service) root.service.refreshBalance()
+              ActionRow {
+                cursorIndex: 1
+                label: "Balance"
+                hint: root.balanceLoading ? "updating" : "refresh"
+                onActivated: if (root.service) root.service.refreshBalance()
+
+                trailingControl: Component {
+                  PanelActionButton {
+                    iconText: "\uF0450"
+                    tooltipText: "Re-read the account balance"
+                    foreground: root.contentForeground
+                    hasCursor: root.cursor === 1
+                    enabled: root.service !== null && !root.balanceLoading
+                    onClicked: if (root.service) root.service.refreshBalance()
+                  }
                 }
               }
-            }
 
-            Column {
-              width: parent.width
-              spacing: Style.space(6)
-              visible: root.balances.length > 0
+              Column {
+                width: parent.width
+                spacing: Style.space(6)
+                visible: root.balances.length > 0
 
-              Repeater {
-                model: root.balances
-                BalanceRow {}
+                Repeater {
+                  model: root.balances
+                  BalanceRow {}
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                visible: root.balanceLoading || root.balanceMessage !== ""
+                text: root.balanceLoading ? "Updating balance…" : root.balanceMessage
+                color: root.service && root.service.balanceStatus === "error" ? Commons.Color.urgent : root.dim
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
               }
             }
 
-            Text {
-              textFormat: Text.PlainText
-              width: parent.width
-              visible: root.balanceMessage !== ""
-              text: root.balanceMessage
-              color: root.dim
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
-            }
           }
 
           PanelSeparator { foreground: root.contentForeground }
@@ -674,11 +737,11 @@ Panel {
 
               trailingControl: Component {
                 ToggleSwitch {
-                  checked: root.service ? root.service.notificationsEnabled : true
+                  checked: root.service ? root.service.notificationsEnabled : false
                   interactive: false
                   hasCursor: root.cursor === 2
                   foreground: root.contentForeground
-                  accent: Color.accent
+                  accent: Commons.Color.accent
                 }
               }
             }

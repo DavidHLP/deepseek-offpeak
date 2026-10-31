@@ -1,0 +1,31 @@
+Panel.qml
+  s_5bb18178043d05::t_223fcc5f5b4719 717
+  s_5bb18178043d05::t_32e6c38d01dc52 346
+  s_5bb18178043d05::t_9ff138d60126a2 51,72-81,218-222,526,714,775
+.gitignore
+  s_5bb18178043d05::t_e07232dc1f777b 38
+scripts/preview/README.md
+  s_5bb18178043d05::t_e07232dc1f777b 61-65
+REFERENCE-REVIEW.md
+  s_5bb18178043d05::t_e07232dc1f777b 1-50
+UI-VALIDATION.md
+  s_5bb18178043d05::t_3d4b47ea6c8d79 92-97
+tests/preview.test.js
+  s_5bb18178043d05::t_89540bd673f86b 51-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32d9ef16383ae9864b4b0f9a20ac925b943b34b1",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}

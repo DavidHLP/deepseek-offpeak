@@ -61,3 +61,8 @@ explicitly does not claim holiday freshness. Pure schedule/balance tests do not
 substitute for these remaining desktop checks.
 
 No user system configuration or live shell instance was restarted or modified.
+
+Repeatable fixture preview is now available via `scripts/preview/run.sh`;
+see [manual acceptance instructions](scripts/preview/README.md). It exposes the
+actual UI with a synthetic service and process-local palettes. Production
+runtime/notification acceptance boundaries above still apply.

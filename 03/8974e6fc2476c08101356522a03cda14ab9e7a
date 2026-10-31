@@ -1,0 +1,21 @@
+MARKETPLACE-CI.md
+  s_5bb18178043d05::t_99f5a954087ca2 1-37
+tests/holidays.test.js
+  s_5bb18178043d05::t_4a73b033b69493 670-729
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "038974e6fc2476c08101356522a03cda14ab9e7a",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}

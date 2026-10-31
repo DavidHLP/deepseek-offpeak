@@ -667,4 +667,64 @@ check("QML started timeout waits for late output and ignores old deferred recove
   }
 })
 
+// Marketplace #7740: exercise the CLI reader without running the CLI or network.
+check("CLI cache reads reject links, FIFOs and oversized files using one bounded descriptor", () => {
+  const cli = fs.readFileSync(path.resolve(__dirname, "../bin/deepseek-offpeak"), "utf8")
+  const start = cli.indexOf("function readHolidayCache(")
+  const end = cli.indexOf("\n// Removes a staging file", start)
+  assert.ok(start >= 0 && end > start, "locate the actual CLI reader")
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "deepseek-cache-reader-"))
+  try {
+    const cache = H.cachePath(temp, 2026)
+    fs.mkdirSync(path.dirname(cache), { recursive: true, mode: 0o700 })
+    const valid = JSON.stringify({ year: 2026, days: [] })
+    const target = path.join(temp, "target.json")
+    fs.writeFileSync(target, valid)
+    fs.symlinkSync(target, cache)
+    const reader = cli.slice(start, end)
+    const run = (expected) => {
+      const script = `
+        const assert = require("assert"), fs = require("fs"), vm = require("vm");
+        const H = require(${JSON.stringify(path.resolve(__dirname, "../lib/Holidays.js"))});
+        const live = new Set(); let bytes = 0;
+        const tracked = Object.create(fs);
+        tracked.openSync = (...args) => { const fd = fs.openSync(...args); live.add(fd); return fd; };
+        tracked.closeSync = fd => { fs.closeSync(fd); live.delete(fd); };
+        tracked.readSync = (...args) => {
+          assert(live.has(args[0]));
+          assert(args[1].length <= H.MAX_CACHE_BYTES + 1);
+          const count = fs.readSync(...args);
+          bytes += count;
+          return count;
+        };
+        const context = vm.createContext({fs: tracked, Holidays: H, Buffer, Date});
+        vm.runInContext(${JSON.stringify(reader)}, context);
+        const result = context.readHolidayCache(${JSON.stringify(temp)}, 2026);
+        assert.strictEqual(result !== null, ${expected});
+        assert.strictEqual(live.size, 0, "every descriptor closed");
+        assert(bytes <= H.MAX_CACHE_BYTES + 1, "bounded read allocation");
+      `
+      const result = childProcess.spawnSync(process.execPath, ["-e", script], {
+        encoding: "utf8", timeout: 2000, maxBuffer: 65536
+      })
+      assert.ifError(result.error)
+      assert.strictEqual(result.status, 0, result.stderr)
+    }
+    run(false)
+    fs.unlinkSync(cache)
+    const fifo = childProcess.spawnSync("/usr/bin/mkfifo", [cache], { timeout: 2000 })
+    assert.ifError(fifo.error)
+    assert.strictEqual(fifo.status, 0)
+    run(false)
+    fs.unlinkSync(cache)
+    fs.writeFileSync(cache, valid + " ".repeat(H.MAX_CACHE_BYTES - valid.length))
+    run(true)
+    fs.appendFileSync(cache, " ")
+    run(false)
+    assert.strictEqual(fs.readFileSync(target, "utf8"), valid, "link target untouched")
+  } finally {
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 console.log(`holidays: ${checks} checks passed`)

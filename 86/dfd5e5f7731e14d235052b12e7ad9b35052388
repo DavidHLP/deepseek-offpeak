@@ -1,0 +1,23 @@
+README.md
+  s_5bb18178043d05::t_e8bc2af5f24093 3-8
+.gitignore
+  s_5bb18178043d05::t_e8bc2af5f24093 39-43
+docs/screenshots/README.md
+  s_5bb18178043d05::t_e8bc2af5f24093 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86dfd5e5f7731e14d235052b12e7ad9b35052388",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}

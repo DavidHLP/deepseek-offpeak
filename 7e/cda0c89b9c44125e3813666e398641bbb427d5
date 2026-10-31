@@ -1,0 +1,33 @@
+tests/balance.test.js
+  s_5bb18178043d05::t_0a5b08d7e32152 436-441
+lib/Balance.js
+  s_5bb18178043d05::t_516c5410712814 461-463
+tests/preview.test.js
+  s_5bb18178043d05::t_973b266785b717 77-101
+  s_5bb18178043d05::t_b7c1499ebfb2f8 74-76,102-116
+README.md
+  s_5bb18178043d05::t_68f8ae994d6917 166-168
+Panel.qml
+  s_5bb18178043d05::t_516c5410712814 51-53,74-85,90-91,110,363
+  s_5bb18178043d05::t_973b266785b717 86-89,542,642
+REFERENCE-REVIEW.md
+  s_5bb18178043d05::t_68f8ae994d6917 34,51-56
+UI-VALIDATION.md
+  s_5bb18178043d05::t_676df1d1b3e59a 98-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ecda0c89b9c44125e3813666e398641bbb427d5",
+  "prompts": {},
+  "sessions": {
+    "s_5bb18178043d05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1913f-c86d-7931-b597-a71d44b96a68",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "DavidHLP <lysf15520112973@163.com>"
+    }
+  }
+}
